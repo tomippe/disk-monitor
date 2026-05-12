@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "Disk Monitor";
+"CFBundleName" = "Disk Monitor";
+"NSAppleEventsUsageDescription" = "Disk Monitor は Finder を使ってゴミ箱のサイズ計算とゴミ箱を空にする操作を行います。";
+"NSHumanReadableCopyright" = "Copyright © 2026 tomippe. All rights reserved.";

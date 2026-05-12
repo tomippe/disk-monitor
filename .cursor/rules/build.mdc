@@ -1,0 +1,35 @@
+---
+description: Disk Monitor のビルド仕様
+alwaysApply: true
+---
+
+# Disk Monitor ビルド仕様
+
+**共通ルール（自動では読み込まれないため、ファイル編集・ビルド・コミットの前に必ず Read ツールで読むこと）:**
+
+- `/Users/tomippe/Cursor/build-common/.cursor/rules/build-system.mdc`
+
+## 概要
+
+- **種別**: ネイティブ Mac アプリ（Swift / Cocoa、メニューバー常駐）
+- **ソース**: `ProcessMonitor.swift`（単一ファイル）
+- **ビルド**: `./build.sh`（`../build-common/` の `version.sh` / `ftp-upload.sh` / `git-commit.sh` を使用）
+- **デプロイ**: `../apps.tomippe.jp/disk-monitor/`（ZIP・manifest.json を FTP 同期）
+- **紹介ページ**: WordPress（`docs/app-page.md`、ローカル `.env` は `.env.example` を参照）
+
+## ビルドコマンド
+
+| コマンド | 内容 |
+|---|---|
+| `./build.sh -app` | コンパイル・バンドル作成・アドホック署名のみ（Developer ID・公証・アップロードなし） |
+| `./build.sh` | 直接配布版（Developer ID・ノータライズ・ステープル）→ 配布先コピー・FTP・バージョンインクリメント・Git コミット |
+| `./build.sh -cm "メッセージ"` | コミットメッセージを指定 |
+| `./build.sh -noverup` | ビルド後の `version.txt` インクリメントをスキップ |
+
+## 固有設定
+
+- **Bundle ID**: `jp.tomippe.diskmonitor`
+- **バージョン**: `version.txt`（ビルド時に `Info.plist` に反映）
+- **直接配布 ZIP**: `build/disk-monitor_mac.zip` → `../apps.tomippe.jp/disk-monitor/`
+- **バンドル名**: `Disk Monitor.app`（実行ファイル名は `ProcessMonitor`）
+- **ローカライズ**: `Resources/{en,ja,zh-Hans}.lproj` の `InfoPlist.strings` / `Localizable.strings`

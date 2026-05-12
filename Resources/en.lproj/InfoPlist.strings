@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "Disk Monitor";
+"CFBundleName" = "Disk Monitor";
+"NSAppleEventsUsageDescription" = "Disk Monitor uses Finder to calculate Trash size and empty the Trash.";
+"NSHumanReadableCopyright" = "Copyright © 2026 tomippe. All rights reserved.";

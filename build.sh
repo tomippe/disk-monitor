@@ -1,0 +1,214 @@
+#!/bin/bash
+set -e
+
+# ===== Disk Monitor ビルドスクリプト =====
+
+APP_EXE="ProcessMonitor"
+APP_BUNDLE_FILE="Disk Monitor.app"
+BUNDLE_ID="jp.tomippe.diskmonitor"
+BUILD_DIR="build"
+ZIP_NAME="disk-monitor_mac.zip"
+DIST_DIR="../apps.tomippe.jp/disk-monitor"
+MACOSX_DEPLOYMENT_TARGET="11.0"
+
+DIRECT_BUNDLE="$BUILD_DIR/$APP_BUNDLE_FILE"
+
+SIGNING_IDENTITY="Developer ID Application: TOMIHIDE OTA (4U63Y3X98K)"
+KEYCHAIN_PROFILE="TOMIHIDE OTA"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+source "$SCRIPT_DIR/../build-common/version.sh"
+source "$SCRIPT_DIR/../build-common/ftp-upload.sh"
+source "$SCRIPT_DIR/../build-common/git-commit.sh"
+
+APP_ONLY=false
+COMMIT_MSG=""
+NO_VERUP=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -app) APP_ONLY=true ;;
+        -cm) shift; COMMIT_MSG="$1" ;;
+        -noverup) NO_VERUP=true ;;
+    esac
+    shift || true
+done
+
+VERSION=$(version_read)
+
+echo "🔨 Disk Monitor v$VERSION をビルド中..."
+
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+
+SWIFT_SOURCES="ProcessMonitor.swift"
+SWIFT_FLAGS="-framework Cocoa -framework CoreServices -framework ServiceManagement"
+UNIVERSAL_BIN="$BUILD_DIR/${APP_EXE}_universal"
+
+echo "📦 コンパイル中 (arm64)..."
+swiftc -o "$BUILD_DIR/${APP_EXE}_arm64" $SWIFT_FLAGS \
+    -target "arm64-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" $SWIFT_SOURCES
+
+echo "📦 コンパイル中 (x86_64)..."
+swiftc -o "$BUILD_DIR/${APP_EXE}_x86_64" $SWIFT_FLAGS \
+    -target "x86_64-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" $SWIFT_SOURCES
+
+echo "📦 Universal Binary を作成中..."
+lipo -create \
+    "$BUILD_DIR/${APP_EXE}_arm64" \
+    "$BUILD_DIR/${APP_EXE}_x86_64" \
+    -output "$UNIVERSAL_BIN"
+
+rm "$BUILD_DIR/${APP_EXE}_arm64" "$BUILD_DIR/${APP_EXE}_x86_64"
+
+create_app_bundle() {
+    local BUNDLE_PATH="$1"
+    local CONTENTS="$BUNDLE_PATH/Contents"
+    local MACOS="$CONTENTS/MacOS"
+    local RESOURCES="$CONTENTS/Resources"
+
+    mkdir -p "$MACOS" "$RESOURCES"
+    cp "$UNIVERSAL_BIN" "$MACOS/$APP_EXE"
+
+    local ICON_BLOCK=""
+    if [ -f "AppIcon.icns" ]; then
+        cp "AppIcon.icns" "$RESOURCES/"
+        ICON_BLOCK="
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>"
+    fi
+
+    cat > "$CONTENTS/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ja</string>
+        <string>zh-Hans</string>
+    </array>
+    <key>CFBundleExecutable</key>
+    <string>$APP_EXE</string>
+    <key>CFBundleIdentifier</key>
+    <string>$BUNDLE_ID</string>
+    <key>CFBundleName</key>
+    <string>Disk Monitor</string>
+    <key>CFBundleDisplayName</key>
+    <string>Disk Monitor</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$VERSION</string>
+    <key>CFBundleVersion</key>
+    <string>$VERSION</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$MACOSX_DEPLOYMENT_TARGET</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Disk Monitor uses Finder to calculate Trash size and empty the Trash.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 tomippe. All rights reserved.</string>${ICON_BLOCK}
+</dict>
+</plist>
+PLIST
+
+    echo -n "APPL????" > "$CONTENTS/PkgInfo"
+
+    for LPROJ in Resources/*.lproj; do
+        if [ -d "$LPROJ" ]; then
+            local LANG
+            LANG=$(basename "$LPROJ")
+            mkdir -p "$RESOURCES/$LANG"
+            cp "$LPROJ"/* "$RESOURCES/$LANG/"
+        fi
+    done
+}
+
+echo ""
+echo "📁 アプリバンドルを作成中 ($APP_BUNDLE_FILE)..."
+create_app_bundle "$DIRECT_BUNDLE"
+rm -f "$UNIVERSAL_BIN"
+
+if $APP_ONLY; then
+    echo ""
+    echo "🔏 アドホック署名中..."
+    codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$DIRECT_BUNDLE"
+    echo ""
+    echo "✅ Disk Monitor v$VERSION — アプリバンドル作成完了! (-app モード)"
+    echo "  open \"$DIRECT_BUNDLE\""
+    exit 0
+fi
+
+echo ""
+echo "========== 直接配布版（署名・ノータライズ）=========="
+
+echo ""
+echo "🔏 コード署名中..."
+codesign --force --deep --sign "$SIGNING_IDENTITY" \
+    --identifier "$BUNDLE_ID" \
+    --options runtime \
+    --timestamp \
+    "$DIRECT_BUNDLE"
+
+echo ""
+echo "📤 ノータライズ送信中..."
+rm -f "$BUILD_DIR/$ZIP_NAME"
+ditto -c -k --keepParent "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
+
+xcrun notarytool submit "$BUILD_DIR/$ZIP_NAME" \
+    --keychain-profile "$KEYCHAIN_PROFILE" \
+    --wait
+
+echo ""
+echo "📎 ステープル中..."
+xcrun stapler staple "$DIRECT_BUNDLE" || true
+
+rm -f "$BUILD_DIR/$ZIP_NAME"
+ditto -c -k --keepParent "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
+
+echo ""
+echo "📂 配布用ディレクトリにコピーしています..."
+if [ -d "$DIST_DIR" ]; then
+    rm -f "$DIST_DIR/$ZIP_NAME"
+else
+    mkdir -p "$DIST_DIR"
+fi
+cp "$BUILD_DIR/$ZIP_NAME" "$DIST_DIR/$ZIP_NAME"
+
+ftp_upload_file "$DIST_DIR/$ZIP_NAME" "disk-monitor/$ZIP_NAME"
+
+python3 -c "
+import json, os
+path = '$DIST_DIR/manifest.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['name'] = 'DiskMonitor'
+data['version'] = '$VERSION'
+data['mac_version'] = '$VERSION'
+with open(path, 'w') as f: json.dump(data, f)
+"
+ftp_upload_file "$DIST_DIR/manifest.json" "disk-monitor/manifest.json"
+
+if ! $NO_VERUP; then
+    echo ""
+    echo "📝 次回用バージョンを更新しています..."
+    version_save_next "$VERSION"
+fi
+
+git_commit_build "$VERSION" "$COMMIT_MSG"
+
+echo ""
+echo "✅ Disk Monitor v$VERSION — ビルド・配布完了!"
+echo "  $DIST_DIR/$ZIP_NAME"
+echo ""

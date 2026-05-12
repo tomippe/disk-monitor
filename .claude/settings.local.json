@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash build.sh)",
+      "Bash(codesign -d --entitlements - \"/Users/tomippe/Cursor/disk-monitor/build/Disk Monitor.app\")",
+      "Bash(ls -la ~/.Trash/ 2>&1 | head -5 && echo \"---\" && ls ~/.Trash/ | wc -l)",
+      "Bash(dd if=/dev/zero of=/tmp/trash_test_10mb.bin bs=1m count=10)",
+      "Bash(osascript -e 'tell application \"Finder\" to move POSIX file \"/tmp/trash_test_10mb.bin\" to trash')",
+      "Bash(osascript -e 'tell application \"Finder\" to get physical size of trash')",
+      "Bash(osascript -e ' *)",
+      "Bash(python3 -c \"import os; s=os.statvfs\\('/'\\); print\\(f'statvfs: {s.f_bavail*s.f_frsize:,}'\\)\")",
+      "Bash(dd if=/dev/zero of=/tmp/bigfile_test.bin bs=1m count=500)",
+      "Bash(rm /tmp/bigfile_test.bin)",
+      "Bash(dd if=/dev/zero of=/tmp/trash_test_a.bin bs=1m count=5)",
+      "Bash(dd if=/dev/zero of=/tmp/trash_test_b.bin bs=1m count=5)",
+      "Bash(osascript -e 'tell application \"Finder\" to move {POSIX file \"/tmp/trash_test_a.bin\", POSIX file \"/tmp/trash_test_b.bin\"} to trash')",
+      "Bash(osascript)",
+      "Bash(dd if=/dev/zero of=/tmp/trash_test.bin bs=1m count=50)",
+      "Bash(osascript -e 'tell application \"Finder\" to move POSIX file \"/tmp/trash_test.bin\" to trash')",
+      "Bash(ps -p 52020 -o pid,lstart,comm)",
+      "Bash(ps -p 67526 -o pid,lstart,comm)"
+    ]
+  }
+}

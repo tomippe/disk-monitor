@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "Disk Monitor";
+"CFBundleName" = "Disk Monitor";
+"NSAppleEventsUsageDescription" = "Disk Monitor 会使用 Finder 计算废纸篓大小并清空废纸篓。";
+"NSHumanReadableCopyright" = "Copyright © 2026 tomippe. All rights reserved.";
