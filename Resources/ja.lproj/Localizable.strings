@@ -29,3 +29,4 @@
 "a11y.disk" = "ディスク";
 "a11y.eject" = "取り出し";
 "a11y.unmount" = "マウント解除";
+"menu.check_for_updates" = "アップデートを確認...";

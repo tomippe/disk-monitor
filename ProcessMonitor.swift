@@ -1,6 +1,7 @@
 import Cocoa
 import CoreServices
 import ServiceManagement
+import Sparkle
 
 private final class FileSystemChangeMonitor {
     private var stream: FSEventStreamRef?
@@ -432,6 +433,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var launchAtLoginMenuItem: NSMenuItem?
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    )
     private var fileSystemChangeMonitor: FileSystemChangeMonitor?
     private var pendingFileSystemRefresh: DispatchWorkItem?
     private let refreshInterval: TimeInterval = 5
@@ -746,6 +750,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             syncLaunchAtLoginItem()
             menu.addItem(.separator())
         }
+        let checkUpdateItem = NSMenuItem(
+            title: NSLocalizedString("menu.check_for_updates", comment: ""),
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        checkUpdateItem.target = updaterController
+        menu.addItem(checkUpdateItem)
+        menu.addItem(.separator())
         menu.addItem(mi(NSLocalizedString("menu.quit", comment: ""), #selector(quit), "q"))
     }
 

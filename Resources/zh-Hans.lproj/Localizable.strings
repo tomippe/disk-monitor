@@ -29,3 +29,4 @@
 "a11y.disk" = "磁盘";
 "a11y.eject" = "弹出";
 "a11y.unmount" = "卸载";
+"menu.check_for_updates" = "检查更新...";

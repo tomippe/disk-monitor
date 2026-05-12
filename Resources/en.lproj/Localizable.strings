@@ -29,3 +29,4 @@
 "a11y.disk" = "Disk";
 "a11y.eject" = "Eject";
 "a11y.unmount" = "Unmount";
+"menu.check_for_updates" = "Check for Updates...";

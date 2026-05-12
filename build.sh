@@ -42,8 +42,45 @@ echo "🔨 Disk Monitor v$VERSION をビルド中..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
+# ---------- アイコン生成 (角丸付き) ----------
+if [ -f "icon.avif" ]; then
+    echo "🎨 AppIcon.icns を生成中..."
+    ICON_TMP="$BUILD_DIR/icon_tmp"
+    ICONSET="$BUILD_DIR/AppIcon.iconset"
+    rm -rf "$ICON_TMP" "$ICONSET"
+    mkdir -p "$ICON_TMP" "$ICONSET"
+
+    # avif → png
+    ffmpeg -y -i icon.avif "$ICON_TMP/icon_src.png" 2>/dev/null
+
+    # 角丸マスクを適用（squircle 約22.37%）
+    swift - "$ICON_TMP/icon_src.png" "$ICON_TMP/icon_rounded.png" 0.2237 << 'SWIFT_EOF'
+import Cocoa
+let args = CommandLine.arguments
+let (inp, out, frac) = (args[1], args[2], Double(args[3])!)
+let img = NSImage(contentsOfFile: inp)!
+let sz = img.size; let r = sz.width * CGFloat(frac)
+let res = NSImage(size: sz); res.lockFocus()
+NSBezierPath(roundedRect: NSRect(origin:.zero,size:sz), xRadius:r, yRadius:r).addClip()
+img.draw(in: NSRect(origin:.zero,size:sz)); res.unlockFocus()
+let bmp = NSBitmapImageRep(data: res.tiffRepresentation!)!
+try! bmp.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:out))
+SWIFT_EOF
+
+    # 各サイズを生成
+    for sz in 16 32 128 256 512; do
+        sips -z $sz $sz "$ICON_TMP/icon_rounded.png" --out "$ICONSET/icon_${sz}x${sz}.png" > /dev/null
+        sz2=$((sz * 2))
+        sips -z $sz2 $sz2 "$ICON_TMP/icon_rounded.png" --out "$ICONSET/icon_${sz}x${sz}@2x.png" > /dev/null
+    done
+
+    iconutil -c icns "$ICONSET" -o AppIcon.icns
+    rm -rf "$ICON_TMP" "$ICONSET"
+fi
+# ---------- アイコン生成ここまで ----------
+
 SWIFT_SOURCES="ProcessMonitor.swift"
-SWIFT_FLAGS="-framework Cocoa -framework CoreServices -framework ServiceManagement"
+SWIFT_FLAGS="-framework Cocoa -framework CoreServices -framework ServiceManagement -F Sparkle.framework/.. -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks"
 UNIVERSAL_BIN="$BUILD_DIR/${APP_EXE}_universal"
 
 echo "📦 コンパイル中 (arm64)..."
@@ -70,6 +107,13 @@ create_app_bundle() {
 
     mkdir -p "$MACOS" "$RESOURCES"
     cp "$UNIVERSAL_BIN" "$MACOS/$APP_EXE"
+
+    # Sparkle.framework を埋め込み
+    local FRAMEWORKS="$CONTENTS/Frameworks"
+    mkdir -p "$FRAMEWORKS"
+    cp -R Sparkle.framework "$FRAMEWORKS/"
+    # XPCServices を MacOS/ 直下にも配置（Sparkle 要件）
+    cp -R Sparkle.framework/Versions/A/XPCServices "$MACOS/" 2>/dev/null || true
 
     local ICON_BLOCK=""
     if [ -f "AppIcon.icns" ]; then
@@ -117,7 +161,11 @@ create_app_bundle() {
     <key>NSAppleEventsUsageDescription</key>
     <string>Disk Monitor uses Finder to calculate Trash size and empty the Trash.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 tomippe. All rights reserved.</string>${ICON_BLOCK}
+    <string>Copyright © 2026 tomippe. All rights reserved.</string>
+    <key>SUFeedURL</key>
+    <string>https://apps.tomippe.jp/disk-monitor/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>7jgkjdF0DqNYkF0fUgdoi926jh1HAckFWMdZQreq7HI=</string>${ICON_BLOCK}
 </dict>
 </plist>
 PLIST
@@ -186,6 +234,16 @@ fi
 cp "$BUILD_DIR/$ZIP_NAME" "$DIST_DIR/$ZIP_NAME"
 
 ftp_upload_file "$DIST_DIR/$ZIP_NAME" "disk-monitor/$ZIP_NAME"
+
+echo ""
+echo "📋 appcast.xml を生成中..."
+SPARKLE_ACCOUNT="ed25519"
+"$SCRIPT_DIR/Sparkle_bin/generate_appcast" \
+    --account "$SPARKLE_ACCOUNT" \
+    --download-url-prefix "https://apps.tomippe.jp/disk-monitor/" \
+    --link "https://apps.tomippe.jp/disk-monitor/" \
+    "$DIST_DIR"
+ftp_upload_file "$DIST_DIR/appcast.xml" "disk-monitor/appcast.xml"
 
 python3 -c "
 import json, os
