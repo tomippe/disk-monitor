@@ -202,6 +202,20 @@ echo "========== 直接配布版（署名・ノータライズ）=========="
 
 echo ""
 echo "🔏 コード署名中..."
+
+# Sparkle内部コンポーネントを先に個別署名（--deepが--identifierを上書きするのを防ぐ）
+SPARKLE_FW="$DIRECT_BUNDLE/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+    echo "  Sparkleコンポーネントを署名中..."
+    for xpc in "$SPARKLE_FW/Versions/B/XPCServices/"*.xpc; do
+        [ -d "$xpc" ] && codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$xpc"
+    done
+    for bin in "$SPARKLE_FW/Versions/B/Autoupdate" "$SPARKLE_FW/Versions/B/Updater.app" "$SPARKLE_FW/Versions/B/Sparkle"; do
+        [ -e "$bin" ] && codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$bin"
+    done
+    codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$SPARKLE_FW"
+fi
+
 codesign --force --deep --sign "$SIGNING_IDENTITY" \
     --identifier "$BUNDLE_ID" \
     --options runtime \
@@ -233,18 +247,6 @@ else
 fi
 cp "$BUILD_DIR/$ZIP_NAME" "$DIST_DIR/$ZIP_NAME"
 
-ftp_upload_file "$DIST_DIR/$ZIP_NAME" "disk-monitor/$ZIP_NAME"
-
-echo ""
-echo "📋 appcast.xml を生成中..."
-SPARKLE_ACCOUNT="ed25519"
-"$SCRIPT_DIR/Sparkle_bin/generate_appcast" \
-    --account "$SPARKLE_ACCOUNT" \
-    --download-url-prefix "https://apps.tomippe.jp/disk-monitor/" \
-    --link "https://apps.tomippe.jp/disk-monitor/" \
-    "$DIST_DIR"
-ftp_upload_file "$DIST_DIR/appcast.xml" "disk-monitor/appcast.xml"
-
 python3 -c "
 import json, os
 path = '$DIST_DIR/manifest.json'
@@ -256,7 +258,16 @@ data['version'] = '$VERSION'
 data['mac_version'] = '$VERSION'
 with open(path, 'w') as f: json.dump(data, f)
 "
-ftp_upload_file "$DIST_DIR/manifest.json" "disk-monitor/manifest.json"
+
+echo ""
+echo "📋 appcast.xml を生成中..."
+SPARKLE_ACCOUNT="ed25519"
+"$SCRIPT_DIR/Sparkle_bin/generate_appcast" \
+    --account "$SPARKLE_ACCOUNT" \
+    --download-url-prefix "https://apps.tomippe.jp/disk-monitor/" \
+    --link "https://apps.tomippe.jp/disk-monitor/" \
+    "$DIST_DIR"
+ftp_upload_dir "$DIST_DIR" "disk-monitor"
 
 if ! $NO_VERUP; then
     echo ""
