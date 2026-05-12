@@ -6,3 +6,9 @@ build/
 # ルートに置いた手動ビルドの .app（正規の成果物は build/ のみ）
 /ProcessMonitor.app/
 /Disk Monitor.app/
+
+# Sparkle（バイナリ・フレームワークはgit管理しない）
+Sparkle.framework/
+Sparkle_bin/
+.derived_data/
+AppIcon.icns
