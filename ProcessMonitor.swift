@@ -599,9 +599,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var rows: [VolumeRow] = []
         for url in urls {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
-            let available = freeBytes(for: url)
-                ?? values.volumeAvailableCapacityForImportantUsage
+            // Finder の「使用可能」は importantUsage（パージ可能領域を含む）を表示する。
+            // 外部・ネットワークボリュームでは importantUsage が 0 のため availableCapacity を使う。
+            let available = values.volumeAvailableCapacityForImportantUsage.flatMap { $0 > 0 ? $0 : nil }
                 ?? values.volumeAvailableCapacity.map(Int64.init)
+                ?? freeBytes(for: url)
             guard let available else { continue }
 
             let name = values.volumeLocalizedName ?? values.volumeName ?? url.lastPathComponent
@@ -1011,8 +1013,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func displayedAvailableBytes(for row: VolumeRow) -> Int64 {
-        guard row.isRootFileSystem else { return row.availableBytes }
-        return max(0, row.availableBytes - trashSizeBytes)
+        // Finder の「使用可能」はゴミ箱分を差し引かないため、ここでも減算しない。
+        return row.availableBytes
     }
 
     private func trashMenuTitle() -> String {
@@ -1055,10 +1057,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func calculateTrashSizeBytes() -> Int64 {
-        if let bytes = calculateTrashSizeBytesWithFileManager() {
+        // Finder の「項目ごとの physical size 合計」は実ファイルを都度読むためリアルタイムかつ正確で、
+        // 全ボリューム＋iCloud Drive のゴミ箱を Finder が集約してくれる。さらに（許可済みの）
+        // Automation だけで動き、フルディスクアクセスを必要としない。
+        // FileManager 直接走査は ~/.Trash の列挙にフルディスクアクセスが要る（未付与だと読めない）ため、
+        // Automation が拒否されている場合のフォールバックとしてのみ使う。
+        // ※ Finder の「コンテナの physical size」はキャッシュで stale だが、ここでは使っていない。
+        if let bytes = calculateTrashSizeBytesWithFinder() {
             return bytes
         }
-        if let bytes = calculateTrashSizeBytesWithFinder() {
+        if let bytes = calculateTrashSizeBytesWithFileManager() {
             return bytes
         }
         return 0
@@ -1163,6 +1171,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let homeTrash = fm.homeDirectoryForCurrentUser.appendingPathComponent(".Trash", isDirectory: true)
         dirs.append(homeTrash)
+
+        // iCloud Drive のゴミ箱。Finder の「ゴミ箱」はローカルと iCloud を合算するため、
+        // ここを含めないと FileManager 集計が iCloud 分を取りこぼす。
+        let iCloudTrash = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Mobile Documents/.Trash", isDirectory: true)
+        dirs.append(iCloudTrash)
 
         let uid = getuid()
         let rootTrashes = URL(fileURLWithPath: "/.Trashes/\(uid)", isDirectory: true)
