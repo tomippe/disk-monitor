@@ -113,15 +113,12 @@ private enum MoveToApplicationsFolder {
                 return
             }
         } else {
-            if fm.fileExists(atPath: destinationURL.path) {
-                if isApplicationAtURLRunning(destinationURL) {
-                    NSWorkspace.shared.open(destinationURL)
-                    exit(0)
-                } else {
-                    _ = try? fm.trashItem(at: destinationURL, resultingItemURL: nil)
-                }
-            }
-            guard (try? fm.copyItem(at: bundleURL, to: destinationURL)) != nil else {
+            switch installBundle(from: bundleURL, to: destinationURL) {
+            case .installed:
+                break
+            case .openedExisting:
+                return
+            case .failed:
                 showErrorAlert()
                 return
             }
@@ -134,11 +131,19 @@ private enum MoveToApplicationsFolder {
         }
     }
 
+    private enum InstallResult {
+        case installed
+        case openedExisting
+        case failed
+    }
+
     private static func isInApplicationsFolder(_ url: URL) -> Bool {
-        let path = url.path
-        let appDirs = FileManager.default.urls(for: .applicationDirectory, in: .allDomainsMask)
-        return appDirs.contains { path.hasPrefix($0.path) } ||
-            path.split(separator: "/").contains("Applications")
+        guard let apps = systemApplicationsDirectory() else { return false }
+        return url.standardizedFileURL.path.hasPrefix(apps.path)
+    }
+
+    private static func systemApplicationsDirectory() -> URL? {
+        FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask).first
     }
 
     private static func isInDownloadsFolder(_ url: URL) -> Bool {
@@ -148,15 +153,41 @@ private enum MoveToApplicationsFolder {
     }
 
     private static func preferredInstallDirectory() -> URL? {
+        systemApplicationsDirectory()
+    }
+
+    private static func installBundle(from sourceURL: URL, to destinationURL: URL) -> InstallResult {
         let fm = FileManager.default
-        let userAppDir = fm.urls(for: .applicationDirectory, in: .userDomainMask).first
-        if let userDir = userAppDir,
-           fm.fileExists(atPath: userDir.path),
-           let contents = try? fm.contentsOfDirectory(atPath: userDir.path),
-           contents.contains(where: { $0.hasSuffix(".app") }) {
-            return userDir
+        if fm.fileExists(atPath: destinationURL.path) {
+            if isApplicationAtURLRunning(destinationURL) {
+                NSWorkspace.shared.open(destinationURL)
+                return .openedExisting
+            }
+            _ = try? fm.trashItem(at: destinationURL, resultingItemURL: nil)
         }
-        return fm.urls(for: .applicationDirectory, in: .localDomainMask).last
+        return runDitto(from: sourceURL, to: destinationURL) ? .installed : .failed
+    }
+
+    private static func runDitto(from sourceURL: URL, to destinationURL: URL) -> Bool {
+        sourceURL.withUnsafeFileSystemRepresentation { sourcePath in
+            destinationURL.withUnsafeFileSystemRepresentation { destPath in
+                guard let sourcePath, let destPath else { return false }
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                process.arguments = [
+                    "--norsrc",
+                    String(cString: sourcePath),
+                    String(cString: destPath),
+                ]
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    return process.terminationStatus == 0
+                } catch {
+                    return false
+                }
+            } ?? false
+        } ?? false
     }
 
     private static func isApplicationAtURLRunning(_ url: URL) -> Bool {
@@ -176,7 +207,7 @@ private enum MoveToApplicationsFolder {
             destinationURL.withUnsafeFileSystemRepresentation { destPath -> (Bool, Bool) in
                 guard let src = sourcePath, let dst = destPath else { return (false, false) }
                 let deleteCmd = "rm -rf '\(String(cString: dst))'"
-                let copyCmd = "cp -pR '\(String(cString: src))' '\(String(cString: dst))'"
+                let copyCmd = "/usr/bin/ditto --norsrc '\(String(cString: src))' '\(String(cString: dst))'"
                 let script = "do shell script \"\(deleteCmd) && \(copyCmd)\" with administrator privileges"
                 guard let appleScript = NSAppleScript(source: script) else { return (false, false) }
                 var error: NSDictionary?
