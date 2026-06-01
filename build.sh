@@ -22,6 +22,7 @@ cd "$SCRIPT_DIR"
 source "$SCRIPT_DIR/../build-common/version.sh"
 source "$SCRIPT_DIR/../build-common/ftp-upload.sh"
 source "$SCRIPT_DIR/../build-common/git-commit.sh"
+source "$SCRIPT_DIR/../build-common/mac-sparkle-lib.sh"
 
 APP_ONLY=false
 COMMIT_MSG=""
@@ -108,12 +109,11 @@ create_app_bundle() {
     mkdir -p "$MACOS" "$RESOURCES"
     cp "$UNIVERSAL_BIN" "$MACOS/$APP_EXE"
 
-    # Sparkle.framework を埋め込み
     local FRAMEWORKS="$CONTENTS/Frameworks"
     mkdir -p "$FRAMEWORKS"
-    cp -R Sparkle.framework "$FRAMEWORKS/"
-    # XPCServices を MacOS/ 直下にも配置（Sparkle 要件）
-    cp -R Sparkle.framework/Versions/A/XPCServices "$MACOS/" 2>/dev/null || true
+    local SPARKLE_REAL
+    SPARKLE_REAL="$(readlink -f Sparkle.framework)"
+    mac_sparkle_embed "$SPARKLE_REAL" "$FRAMEWORKS/Sparkle.framework"
 
     local ICON_BLOCK=""
     if [ -f "AppIcon.icns" ]; then
@@ -202,30 +202,11 @@ echo "========== 直接配布版（署名・ノータライズ）=========="
 
 echo ""
 echo "🔏 コード署名中..."
-
-# Sparkle内部コンポーネントを先に個別署名（--deepが--identifierを上書きするのを防ぐ）
-SPARKLE_FW="$DIRECT_BUNDLE/Contents/Frameworks/Sparkle.framework"
-if [ -d "$SPARKLE_FW" ]; then
-    echo "  Sparkleコンポーネントを署名中..."
-    for xpc in "$SPARKLE_FW/Versions/B/XPCServices/"*.xpc; do
-        [ -d "$xpc" ] && codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$xpc"
-    done
-    for bin in "$SPARKLE_FW/Versions/B/Autoupdate" "$SPARKLE_FW/Versions/B/Updater.app" "$SPARKLE_FW/Versions/B/Sparkle"; do
-        [ -e "$bin" ] && codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$bin"
-    done
-    codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$SPARKLE_FW"
-fi
-
-codesign --force --deep --sign "$SIGNING_IDENTITY" \
-    --identifier "$BUNDLE_ID" \
-    --options runtime \
-    --timestamp \
-    "$DIRECT_BUNDLE"
+mac_sparkle_sign_app "$DIRECT_BUNDLE" "$SIGNING_IDENTITY" "$BUNDLE_ID"
 
 echo ""
 echo "📤 ノータライズ送信中..."
-rm -f "$BUILD_DIR/$ZIP_NAME"
-ditto -c -k --keepParent "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
+mac_create_dist_zip "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
 
 xcrun notarytool submit "$BUILD_DIR/$ZIP_NAME" \
     --keychain-profile "$KEYCHAIN_PROFILE" \
@@ -235,8 +216,12 @@ echo ""
 echo "📎 ステープル中..."
 xcrun stapler staple "$DIRECT_BUNDLE" || true
 
-rm -f "$BUILD_DIR/$ZIP_NAME"
-ditto -c -k --keepParent "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
+mac_create_dist_zip "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
+
+echo ""
+echo "🔍 配布前検査（ZIP 内容 + デスクトップ基準 + 第2検査機）..."
+chmod +x "$SCRIPT_DIR/../build-common/verify-mac-distribution-post.sh"
+"$SCRIPT_DIR/../build-common/verify-mac-distribution-post.sh" "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
 
 echo ""
 echo "📂 配布用ディレクトリにコピーしています..."
