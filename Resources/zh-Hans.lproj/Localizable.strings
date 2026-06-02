@@ -11,7 +11,8 @@
 "menu.copy_status" = "复制状态";
 "menu.refresh" = "立即刷新";
 "menu.login_item" = "登录时打开";
-"menu.quit" = "退出";
+"menu.restart_format" = "重新启动 %@";
+"menu.quit_format" = "退出 %@";
 "menu.no_volumes" = "没有卷数据";
 "menu.trash" = "废纸篓";
 "menu.empty_trash" = "清空废纸篓";

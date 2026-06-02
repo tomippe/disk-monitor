@@ -11,7 +11,8 @@
 "menu.copy_status" = "状況をコピー";
 "menu.refresh" = "今すぐ更新";
 "menu.login_item" = "ログイン時に起動";
-"menu.quit" = "終了";
+"menu.restart_format" = "%@ を再起動";
+"menu.quit_format" = "%@ を終了";
 "menu.no_volumes" = "ボリューム情報なし";
 "menu.trash" = "ゴミ箱";
 "menu.empty_trash" = "ゴミ箱を空にする";

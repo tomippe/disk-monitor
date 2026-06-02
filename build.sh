@@ -82,7 +82,8 @@ fi
 
 MOVE_SWIFT="$SCRIPT_DIR/../build-common/MoveToApplicationsFolder.swift"
 TOMIPPE_ABOUT="$SCRIPT_DIR/../build-common/TomippeAppAbout.swift"
-SWIFT_SOURCES="ProcessMonitor.swift $MOVE_SWIFT $TOMIPPE_ABOUT"
+TOMIPPE_RELAUNCH="$SCRIPT_DIR/../build-common/TomippeRelaunch.swift"
+SWIFT_SOURCES="ProcessMonitor.swift $MOVE_SWIFT $TOMIPPE_ABOUT $TOMIPPE_RELAUNCH"
 for src in $SWIFT_SOURCES; do
     if [ ! -f "$src" ]; then
         echo "❌ $src がありません。"

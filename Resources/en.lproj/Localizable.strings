@@ -11,7 +11,8 @@
 "menu.copy_status" = "Copy Status";
 "menu.refresh" = "Refresh Now";
 "menu.login_item" = "Open at Login";
-"menu.quit" = "Quit";
+"menu.restart_format" = "Restart %@";
+"menu.quit_format" = "Quit %@";
 "menu.no_volumes" = "No Volume Data";
 "menu.trash" = "Trash";
 "menu.empty_trash" = "Empty Trash";
