@@ -29,4 +29,9 @@
 "a11y.disk" = "磁盘";
 "a11y.eject" = "弹出";
 "a11y.unmount" = "卸载";
+"menu.about" = "版本信息...";
 "menu.check_for_updates" = "检查更新...";
+"about.format" = "版本 %@（构建 %@）";
+"about.check_updates" = "检查更新";
+"about.open_intro" = "在 apps.tomippe.jp 打开应用介绍页";
+"button.ok" = "好";

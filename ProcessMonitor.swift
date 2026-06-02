@@ -274,6 +274,8 @@ private final class VolumeMenuItemView: NSView {
     }
 }
 
+private let diskMonitorIntroURL = URL(string: "https://apps.tomippe.jp/disk-monitor/")!
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
@@ -597,13 +599,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             syncLaunchAtLoginItem()
             menu.addItem(.separator())
         }
-        let checkUpdateItem = NSMenuItem(
-            title: NSLocalizedString("menu.check_for_updates", comment: ""),
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
-            keyEquivalent: ""
-        )
-        checkUpdateItem.target = updaterController
-        menu.addItem(checkUpdateItem)
+        menu.addItem(sectionMenuItem(
+            NSLocalizedString("menu.about", comment: ""),
+            #selector(showAboutPanel),
+            "",
+            symbolName: "info.circle"
+        ))
+        menu.addItem(sparkleCheckForUpdatesMenuItem())
         menu.addItem(.separator())
         menu.addItem(mi(NSLocalizedString("menu.quit", comment: ""), #selector(quit), "q"))
     }
@@ -781,6 +783,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshVolumes()
     }
 
+    @objc private func showAboutPanel() {
+        TomippeAppAbout.show(
+            appName: "Disk Monitor",
+            introURL: diskMonitorIntroURL,
+            checkForUpdates: { [weak self] in self?.updaterController.checkForUpdates(nil) }
+        )
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -794,6 +804,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func sectionMenuItem(_ title: String, _ action: Selector, _ key: String, symbolName: String) -> NSMenuItem {
         let item = mi(title, action, key)
         if let icon = NSImage(systemSymbolName: symbolName, accessibilityDescription: title) {
+            icon.isTemplate = true
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
+        }
+        return item
+    }
+
+    private func sparkleCheckForUpdatesMenuItem() -> NSMenuItem {
+        let title = NSLocalizedString("menu.check_for_updates", comment: "")
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        item.target = updaterController
+        if let icon = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: title) {
             icon.isTemplate = true
             icon.size = NSSize(width: 16, height: 16)
             item.image = icon

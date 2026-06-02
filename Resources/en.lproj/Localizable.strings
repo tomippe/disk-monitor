@@ -29,4 +29,9 @@
 "a11y.disk" = "Disk";
 "a11y.eject" = "Eject";
 "a11y.unmount" = "Unmount";
+"menu.about" = "About Disk Monitor...";
 "menu.check_for_updates" = "Check for Updates...";
+"about.format" = "Version %@ (build %@)";
+"about.check_updates" = "Check for Updates";
+"about.open_intro" = "Open the app page on apps.tomippe.jp";
+"button.ok" = "OK";
