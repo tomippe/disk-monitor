@@ -80,8 +80,15 @@ SWIFT_EOF
 fi
 # ---------- アイコン生成ここまで ----------
 
-SWIFT_SOURCES="ProcessMonitor.swift"
-SWIFT_FLAGS="-framework Cocoa -framework CoreServices -framework ServiceManagement -F Sparkle.framework/.. -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks"
+MOVE_SWIFT="$SCRIPT_DIR/../build-common/MoveToApplicationsFolder.swift"
+SWIFT_SOURCES="ProcessMonitor.swift $MOVE_SWIFT"
+for src in $SWIFT_SOURCES; do
+    if [ ! -f "$src" ]; then
+        echo "❌ $src がありません。"
+        exit 1
+    fi
+done
+SWIFT_FLAGS="-parse-as-library -framework Cocoa -framework CoreServices -framework ServiceManagement -F Sparkle.framework/.. -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks"
 UNIVERSAL_BIN="$BUILD_DIR/${APP_EXE}_universal"
 
 echo "📦 コンパイル中 (arm64)..."
