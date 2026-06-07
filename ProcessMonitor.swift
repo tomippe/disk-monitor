@@ -285,13 +285,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private var fileSystemChangeMonitor: FileSystemChangeMonitor?
     private var pendingFileSystemRefresh: DispatchWorkItem?
+    private let refreshQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.refresh", qos: .utility)
     private let refreshInterval: TimeInterval = 5
+    private let trashRefreshInterval: TimeInterval = 30
+    private var trashRefreshTimer: Timer?
     private let menuNameWidth = 20
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
     private var volumeRows: [VolumeRow] = []
     private var statusText = NSLocalizedString("status.loading", comment: "")
     private var trashSizeBytes: Int64 = 0
+    private var isMenuVisible = false
     private static var finderTrashSizeDenied = false
 
     func applicationWillFinishLaunching(_: Notification) {
@@ -315,16 +319,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fileSystemChangeMonitor = FileSystemChangeMonitor { [weak self] in
             self?.scheduleRefreshAfterFileSystemChange()
         }
-        refreshVolumes()
+        refreshVolumes(includeTrash: true)
         timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.refreshVolumes()
         }
         timer?.tolerance = 2
+        trashRefreshTimer = Timer.scheduledTimer(withTimeInterval: trashRefreshInterval, repeats: true) { [weak self] _ in
+            self?.refreshTrashSize()
+        }
+        trashRefreshTimer?.tolerance = 5
     }
 
     func menuWillOpen(_: NSMenu) {
+        isMenuVisible = true
         rebuildMenu()
         syncLaunchAtLoginItem()
+        refreshVolumes(includeTrash: true)
+    }
+
+    func menuDidClose(_: NSMenu) {
+        isMenuVisible = false
     }
 
     private func syncLaunchAtLoginItem() {
@@ -363,17 +377,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func refreshVolumes() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+    private func refreshVolumes(includeTrash: Bool = false) {
+        refreshQueue.async { [weak self] in
+            guard let self else { return }
             let rows = Self.readVolumes()
+            let trashBytes = includeTrash ? Self.calculateTrashSizeBytes() : nil
             DispatchQueue.main.async {
-                self?.volumeRows = rows
-                self?.trashSizeBytes = Self.calculateTrashSizeBytes()
-                self?.updateStatus()
-                self?.rebuildMenu()
-                self?.updateFileSystemChangeMonitoring()
+                self.applyVolumeRows(rows)
+                if let trashBytes {
+                    self.applyTrashSize(trashBytes)
+                }
             }
         }
+    }
+
+    private func refreshTrashSize() {
+        refreshQueue.async { [weak self] in
+            let trashBytes = Self.calculateTrashSizeBytes()
+            DispatchQueue.main.async {
+                self?.applyTrashSize(trashBytes)
+            }
+        }
+    }
+
+    private func applyVolumeRows(_ rows: [VolumeRow]) {
+        volumeRows = rows
+        updateStatus()
+        rebuildMenuIfOpen()
+        updateFileSystemChangeMonitoring()
+    }
+
+    private func applyTrashSize(_ bytes: Int64) {
+        trashSizeBytes = bytes
+        rebuildMenuIfOpen()
+    }
+
+    /// メニュー非表示時に rebuildMenu すると無駄なメインスレッド負荷になるため、開いているときだけ再構築する。
+    private func rebuildMenuIfOpen() {
+        guard isMenuVisible else { return }
+        rebuildMenu()
+        syncLaunchAtLoginItem()
     }
 
     private func scheduleRefreshAfterFileSystemChange() {
@@ -414,22 +457,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         var rows: [VolumeRow] = []
         for url in urls {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            guard let quick = resourceValues(for: url, keys: [.volumeIsLocalKey], timeout: 2.0) else { continue }
+            let isNetwork = quick.volumeIsLocal == false
+            let resourceTimeout: TimeInterval = isNetwork ? 2.0 : 8.0
+            guard let values = resourceValues(for: url, keys: Set(keys), timeout: resourceTimeout) else { continue }
             // Finder の「使用可能」は importantUsage（パージ可能領域を含む）を表示する。
             // 外部・ネットワークボリュームでは importantUsage が 0 のため availableCapacity を使う。
             let available = values.volumeAvailableCapacityForImportantUsage.flatMap { $0 > 0 ? $0 : nil }
                 ?? values.volumeAvailableCapacity.map(Int64.init)
-                ?? freeBytes(for: url)
+                ?? (isNetwork ? nil : freeBytes(for: url))
             guard let available else { continue }
 
             let name = values.volumeLocalizedName ?? values.volumeName ?? url.lastPathComponent
             let isEjectable = values.volumeIsEjectable ?? false
-            let isUnmountable = pathReportsUnmountable(url.path)
+            // ネットワークボリュームへの getFileSystemInfo / diskutil は応答が遅く、UI を巻き込む原因になる。
+            let isUnmountable = isNetwork
+                ? isEjectable
+                : pathReportsUnmountable(url.path)
             let isRoot = values.volumeIsRootFileSystem ?? (url.path == "/")
             let icon = (values.effectiveIcon as? NSImage)
                 ?? NSWorkspace.shared.icon(forFile: url.path)
 
-            let info = diskInfo(for: url.path)
+            let info = isNetwork ? [:] : diskInfo(for: url.path)
             let kind = classifyVolume(values: values, info: info)
             let nonFreeMetric = isNonFreeMetric(values: values, info: info)
             rows.append(
@@ -510,7 +559,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return false
     }
 
-    private static func diskInfo(for mountPath: String) -> [String: Any] {
+    private static func resourceValues(
+        for url: URL,
+        keys: Set<URLResourceKey>,
+        timeout: TimeInterval
+    ) -> URLResourceValues? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: URLResourceValues?
+        DispatchQueue.global(qos: .utility).async {
+            result = try? url.resourceValues(forKeys: keys)
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            return nil
+        }
+        return result
+    }
+
+    private static func diskInfo(for mountPath: String, timeout: TimeInterval = 2) -> [String: Any] {
         let task = Process()
         let pipe = Pipe()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
@@ -524,9 +590,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return [:]
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        guard task.terminationStatus == 0 else { return [:] }
+        let semaphore = DispatchSemaphore(value: 0)
+        var data = Data()
+        var status: Int32 = -1
+        DispatchQueue.global(qos: .utility).async {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            status = task.terminationStatus
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            task.terminate()
+            return [:]
+        }
+        guard status == 0 else { return [:] }
         guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let dict = plist as? [String: Any] else {
             return [:]
@@ -1036,12 +1113,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rootTrashes = URL(fileURLWithPath: "/.Trashes/\(uid)", isDirectory: true)
         dirs.append(rootTrashes)
 
-        if let mounted = fm.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) {
-            for volume in mounted {
-                let volumeTrash = volume.appendingPathComponent(".Trashes/\(uid)", isDirectory: true)
-                dirs.append(volumeTrash)
-            }
-        }
+        // ネットワークボリューム上の .Trashes へ fileExists すると応答が遅くなる。
+        // Finder 集計（Automation）が全ボリューム分を扱うため、ここではローカル系のみ走査する。
 
         return dirs.filter { dir in
             let key = dir.path
