@@ -285,7 +285,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private var fileSystemChangeMonitor: FileSystemChangeMonitor?
     private var pendingFileSystemRefresh: DispatchWorkItem?
-    private let refreshQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.refresh", qos: .utility)
+    private let trashRefreshQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.trash", qos: .utility)
+    private var volumeRefreshGeneration = 0
     private let refreshInterval: TimeInterval = 5
     private let trashRefreshInterval: TimeInterval = 30
     private var trashRefreshTimer: Timer?
@@ -378,21 +379,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshVolumes(includeTrash: Bool = false) {
-        refreshQueue.async { [weak self] in
-            guard let self else { return }
+        volumeRefreshGeneration += 1
+        let generation = volumeRefreshGeneration
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let rows = Self.readVolumes()
-            let trashBytes = includeTrash ? Self.calculateTrashSizeBytes() : nil
             DispatchQueue.main.async {
+                guard let self, generation == self.volumeRefreshGeneration else { return }
                 self.applyVolumeRows(rows)
-                if let trashBytes {
-                    self.applyTrashSize(trashBytes)
+                if includeTrash {
+                    self.refreshTrashSize()
                 }
             }
         }
     }
 
     private func refreshTrashSize() {
-        refreshQueue.async { [weak self] in
+        trashRefreshQueue.async { [weak self] in
             let trashBytes = Self.calculateTrashSizeBytes()
             DispatchQueue.main.async {
                 self?.applyTrashSize(trashBytes)
@@ -401,6 +403,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func applyVolumeRows(_ rows: [VolumeRow]) {
+        // 一時的な取得失敗で直前の正常データを「取得失敗」表示に戻さない。
+        if rows.isEmpty, !volumeRows.isEmpty { return }
         volumeRows = rows
         updateStatus()
         rebuildMenuIfOpen()
@@ -429,9 +433,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateFileSystemChangeMonitoring() {
-        let paths = volumeRows
+        var paths = volumeRows
             .filter { $0.kind != .network && !$0.isNonFreeMetric }
             .map { $0.url.path }
+        // 取得失敗中もルートを監視し、復帰のきっかけを残す。
+        if paths.isEmpty {
+            paths = ["/"]
+        }
         fileSystemChangeMonitor?.update(paths: paths)
     }
 
@@ -451,7 +459,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .effectiveIconKey,
         ]
 
-        guard let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) else {
+        guard let urlsList = withTimeout(5.0, {
+            FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes])
+        }), let urls = urlsList else {
             return []
         }
 
@@ -504,22 +514,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// `NSWorkspace.getFileSystemInfoForPath` の isUnmountable に相当。
     private static func pathReportsUnmountable(_ path: String) -> Bool {
-        var removable = ObjCBool(false)
-        var writable = ObjCBool(false)
-        var unmountable = ObjCBool(false)
-        var description: NSString?
-        var fsType: NSString?
-        guard NSWorkspace.shared.getFileSystemInfo(
-            forPath: path,
-            isRemovable: &removable,
-            isWritable: &writable,
-            isUnmountable: &unmountable,
-            description: &description,
-            type: &fsType
-        ) else {
-            return false
-        }
-        return unmountable.boolValue
+        withTimeout(2.0) {
+            var removable = ObjCBool(false)
+            var writable = ObjCBool(false)
+            var unmountable = ObjCBool(false)
+            var description: NSString?
+            var fsType: NSString?
+            guard NSWorkspace.shared.getFileSystemInfo(
+                forPath: path,
+                isRemovable: &removable,
+                isWritable: &writable,
+                isUnmountable: &unmountable,
+                description: &description,
+                type: &fsType
+            ) else {
+                return false
+            }
+            return unmountable.boolValue
+        } ?? false
     }
 
     private static func classifyVolume(values: URLResourceValues, info: [String: Any]) -> VolumeKind {
@@ -546,6 +558,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         return .other
+    }
+
+    private static func withTimeout<T>(_ timeout: TimeInterval, _ work: @escaping () -> T) -> T? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: T?
+        DispatchQueue.global(qos: .utility).async {
+            result = work()
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            return nil
+        }
+        return result
     }
 
     private static func isNonFreeMetric(values: URLResourceValues, info: [String: Any]) -> Bool {
@@ -612,11 +637,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func freeBytes(for url: URL) -> Int64? {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: url.path)
-        if let free = attrs?[.systemFreeSize] as? NSNumber {
+        guard let attrsMap = withTimeout(2.0, {
+            try? FileManager.default.attributesOfFileSystem(forPath: url.path)
+        }), let attrs = attrsMap else {
+            return nil
+        }
+        if let free = attrs[.systemFreeSize] as? NSNumber {
             return free.int64Value
         }
-        if let free = attrs?[.systemFreeSize] as? Int64 {
+        if let free = attrs[.systemFreeSize] as? Int64 {
             return free
         }
         return nil
