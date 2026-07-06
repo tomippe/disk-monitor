@@ -7,9 +7,11 @@ APP_EXE="ProcessMonitor"
 APP_BUNDLE_FILE="Disk Monitor.app"
 BUNDLE_ID="jp.tomippe.diskmonitor"
 BUILD_DIR="build"
-ZIP_NAME="disk-monitor_mac.zip"
 DIST_DIR="../apps.tomippe.jp/disk-monitor"
 MACOSX_DEPLOYMENT_TARGET="11.0"
+MAC_DIST_SLUG="disk-monitor"
+MAC_DIST_PKG="dmg"
+MAC_DIST_MANIFEST_NAME="DiskMonitor"
 
 DIRECT_BUNDLE="$BUILD_DIR/$APP_BUNDLE_FILE"
 
@@ -23,6 +25,7 @@ source "$SCRIPT_DIR/../build-common/version.sh"
 source "$SCRIPT_DIR/../build-common/ftp-upload.sh"
 source "$SCRIPT_DIR/../build-common/git-commit.sh"
 source "$SCRIPT_DIR/../build-common/mac-sparkle-lib.sh"
+source "$SCRIPT_DIR/../build-common/mac-sparkle-dist.sh"
 
 APP_ONLY=false
 COMMIT_MSG=""
@@ -131,8 +134,8 @@ create_app_bundle() {
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>"
     fi
-    if [ -f "$SCRIPT_DIR/../auto-mount/Resources/AppsLogo.png" ]; then
-        cp "$SCRIPT_DIR/../auto-mount/Resources/AppsLogo.png" "$RESOURCES/"
+    if [ -f "$(mac_apps_logo_path)" ]; then
+        cp "$(mac_apps_logo_path)" "$RESOURCES/"
     elif [ -f "Resources/AppsLogo.png" ]; then
         cp "Resources/AppsLogo.png" "$RESOURCES/"
     fi
@@ -211,62 +214,11 @@ if $APP_ONLY; then
     exit 0
 fi
 
-echo ""
-echo "========== 直接配布版（署名・ノータライズ）=========="
-
-echo ""
-echo "🔏 コード署名中..."
-mac_sparkle_sign_app "$DIRECT_BUNDLE" "$SIGNING_IDENTITY" "$BUNDLE_ID"
-
-echo ""
-echo "📤 ノータライズ送信中..."
-mac_create_dist_zip "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
-
-xcrun notarytool submit "$BUILD_DIR/$ZIP_NAME" \
-    --keychain-profile "$KEYCHAIN_PROFILE" \
-    --wait
-
-echo ""
-echo "📎 ステープル中..."
-xcrun stapler staple "$DIRECT_BUNDLE" || true
-
-mac_create_dist_zip "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
-
-echo ""
-echo "🔍 配布前検査（ZIP 内容 + デスクトップ基準 + 第2検査機）..."
-chmod +x "$SCRIPT_DIR/../build-common/verify-mac-distribution-post.sh"
-"$SCRIPT_DIR/../build-common/verify-mac-distribution-post.sh" "$DIRECT_BUNDLE" "$BUILD_DIR/$ZIP_NAME"
-
-echo ""
-echo "📂 配布用ディレクトリにコピーしています..."
-if [ -d "$DIST_DIR" ]; then
-    rm -f "$DIST_DIR/$ZIP_NAME"
-else
-    mkdir -p "$DIST_DIR"
-fi
-cp "$BUILD_DIR/$ZIP_NAME" "$DIST_DIR/$ZIP_NAME"
-
-python3 -c "
-import json, os
-path = '$DIST_DIR/manifest.json'
-data = {}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-data['name'] = 'DiskMonitor'
-data['version'] = '$VERSION'
-data['mac_version'] = '$VERSION'
-with open(path, 'w') as f: json.dump(data, f)
-"
-
-echo ""
-echo "📋 appcast.xml を生成中..."
-SPARKLE_ACCOUNT="ed25519"
-"$SCRIPT_DIR/Sparkle_bin/generate_appcast" \
-    --account "$SPARKLE_ACCOUNT" \
-    --download-url-prefix "https://apps.tomippe.jp/disk-monitor/" \
-    --link "https://apps.tomippe.jp/disk-monitor/" \
-    "$DIST_DIR"
-ftp_upload_dir "$DIST_DIR" "disk-monitor"
+MAC_DIST_BUNDLE_ID="$BUNDLE_ID"
+mac_sparkle_publish_direct_dist \
+    "$DIRECT_BUNDLE" "$BUILD_DIR" "$DIST_DIR" "$VERSION" \
+    "$SIGNING_IDENTITY" "$KEYCHAIN_PROFILE" "$APP_BUNDLE_FILE" \
+    "$SCRIPT_DIR/Sparkle_bin/generate_appcast"
 
 if ! $NO_VERUP; then
     echo ""
@@ -278,5 +230,5 @@ git_commit_build "$VERSION" "$COMMIT_MSG"
 
 echo ""
 echo "✅ Disk Monitor v$VERSION — ビルド・配布完了!"
-echo "  $DIST_DIR/$ZIP_NAME"
+echo "  $MAC_DIST_OUTPUT_PATH"
 echo ""
