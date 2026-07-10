@@ -31,6 +31,7 @@
 "a11y.eject" = "弹出";
 "a11y.unmount" = "卸载";
 "menu.about" = "关于 Disk Monitor";
+"menu.send_feedback" = "发送反馈...";
 "menu.check_for_updates" = "检查更新...";
 "about.format" = "版本 %@（构建 %@）";
 "about.check_updates" = "检查更新";

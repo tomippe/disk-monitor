@@ -31,6 +31,7 @@
 "a11y.eject" = "取り出し";
 "a11y.unmount" = "マウント解除";
 "menu.about" = "Disk Monitorについて";
+"menu.send_feedback" = "フィードバックを送る...";
 "menu.check_for_updates" = "アップデートを確認...";
 "about.format" = "バージョン %@（ビルド %@）";
 "about.check_updates" = "アップデートを確認";

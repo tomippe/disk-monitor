@@ -31,6 +31,7 @@
 "a11y.eject" = "Eject";
 "a11y.unmount" = "Unmount";
 "menu.about" = "About Disk Monitor...";
+"menu.send_feedback" = "Send Feedback...";
 "menu.check_for_updates" = "Check for Updates...";
 "about.format" = "Version %@ (build %@)";
 "about.check_updates" = "Check for Updates";

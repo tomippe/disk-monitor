@@ -711,6 +711,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "",
             symbolName: "info.circle"
         ))
+        menu.addItem(sectionMenuItem(
+            NSLocalizedString("menu.send_feedback", comment: ""),
+            #selector(openFeedbackForm),
+            "",
+            symbolName: "star.bubble"
+        ))
         menu.addItem(sparkleCheckForUpdatesMenuItem())
         menu.addItem(.separator())
         menu.addItem(TomippeRelaunch.restartMenuItem(
@@ -905,6 +911,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             introURL: diskMonitorIntroURL,
             checkForUpdates: { [weak self] in self?.updaterController.checkForUpdates(nil) }
         )
+    }
+
+    @objc private func openFeedbackForm() {
+        TomippeFeedbackForm.open(appName: "Disk Monitor")
     }
 
     @objc private func restartApp() {
