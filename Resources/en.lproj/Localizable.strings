@@ -17,6 +17,10 @@
 "menu.trash" = "Trash";
 "menu.empty_trash" = "Empty Trash";
 "menu.open_disk_utility" = "Open Disk Utility";
+"menu.directory_loading" = "…";
+"menu.directory_empty" = "(Empty)";
+"menu.directory_read_error" = "(Can’t read: %@)";
+"menu.directory_more" = "…%d more (Open in Finder)";
 "menu.eject" = "Eject";
 "menu.unmount" = "Unmount";
 "alert.loginitem_failed_title" = "Couldn’t Update Login Item";

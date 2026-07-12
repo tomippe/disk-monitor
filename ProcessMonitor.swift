@@ -94,184 +94,14 @@ private struct VolumeRow {
     }
 }
 
-private final class VolumeMenuItemView: NSView {
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let freeLabel = NSTextField(labelWithString: "")
-    private var ejectButton: NSButton?
-    private let onOpenInFinder: () -> Void
-    private let onEject: (() -> Void)?
-    private var trackingAreaRef: NSTrackingArea?
-    private var isHovered = false
-    private var highlightTimer: Timer?
-
-    init(frame frameRect: NSRect, row: VolumeRow, freeText: String, onOpenInFinder: @escaping () -> Void, onEject: (() -> Void)?) {
-        self.onOpenInFinder = onOpenInFinder
-        self.onEject = onEject
-        super.init(frame: frameRect)
-
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-
-        let iconView = NSImageView(image: row.icon)
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.setContentHuggingPriority(.required, for: .horizontal)
-        iconView.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        iconView.heightAnchor.constraint(equalToConstant: 16).isActive = true
-
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.stringValue = row.name
-        nameLabel.lineBreakMode = .byTruncatingMiddle
-        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        freeLabel.translatesAutoresizingMaskIntoConstraints = false
-        freeLabel.stringValue = freeText
-        freeLabel.alignment = .right
-        freeLabel.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        freeLabel.setContentHuggingPriority(.required, for: .horizontal)
-        freeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        freeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 72).isActive = true
-
-        let stack = NSStackView()
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        addSubview(stack)
-
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        stack.addArrangedSubview(iconView)
-        stack.addArrangedSubview(nameLabel)
-        stack.addArrangedSubview(spacer)
-        stack.addArrangedSubview(freeLabel)
-
-        let ejectSlot = NSView()
-        ejectSlot.translatesAutoresizingMaskIntoConstraints = false
-        ejectSlot.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        ejectSlot.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        stack.addArrangedSubview(ejectSlot)
-
-        if onEject != nil {
-            let detachSymbol = row.detachUsesUnmountLabel ? "externaldrive.badge.minus" : "eject.fill"
-            let detachA11y = row.detachUsesUnmountLabel
-                ? NSLocalizedString("a11y.unmount", comment: "")
-                : NSLocalizedString("a11y.eject", comment: "")
-            let button = NSButton(
-                image: NSImage(systemSymbolName: detachSymbol, accessibilityDescription: detachA11y)
-                    ?? NSImage(systemSymbolName: "eject.fill", accessibilityDescription: detachA11y)
-                    ?? NSImage(),
-                target: self,
-                action: #selector(handleEject)
-            )
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.isBordered = false
-            button.bezelStyle = .regularSquare
-            button.imageScaling = .scaleProportionallyUpOrDown
-            button.contentTintColor = .labelColor
-            button.setButtonType(.momentaryChange)
-            button.focusRingType = .none
-            button.image?.size = NSSize(width: 10, height: 10)
-            button.frame = NSRect(x: 0, y: 0, width: 16, height: 16)
-            ejectSlot.addSubview(button)
-            button.centerXAnchor.constraint(equalTo: ejectSlot.centerXAnchor).isActive = true
-            button.centerYAnchor.constraint(equalTo: ejectSlot.centerYAnchor).isActive = true
-            button.widthAnchor.constraint(equalToConstant: 12).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 12).isActive = true
-            ejectButton = button
-        }
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 3),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 320)
-        ])
-
-        let click = NSClickGestureRecognizer(target: self, action: #selector(handleOpen))
-        addGestureRecognizer(click)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    deinit {
-        highlightTimer?.invalidate()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        highlightTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.03, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let highlighted = self.enclosingMenuItem?.isHighlighted ?? false
-            if highlighted != self.isHovered {
-                self.isHovered = highlighted
-                self.needsDisplay = true
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        RunLoop.main.add(timer, forMode: .eventTracking)
-        highlightTimer = timer
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaRef {
-            removeTrackingArea(trackingAreaRef)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInActiveApp, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        trackingAreaRef = trackingArea
-    }
-
-    override func mouseEntered(with _: NSEvent) {
-        // NSMenu 内では mouseEntered が不安定なため、isHighlighted 監視を主とする。
-    }
-
-    override func mouseExited(with _: NSEvent) {
-        // NSMenu 内では mouseExited が不安定なため、isHighlighted 監視を主とする。
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if isHovered {
-            NSColor.controlAccentColor.setFill()
-            dirtyRect.fill()
-            nameLabel.textColor = .alternateSelectedControlTextColor
-            freeLabel.textColor = .alternateSelectedControlTextColor
-            ejectButton?.contentTintColor = .alternateSelectedControlTextColor
-        } else {
-            NSColor.clear.setFill()
-            dirtyRect.fill()
-            nameLabel.textColor = .labelColor
-            freeLabel.textColor = .labelColor
-            ejectButton?.contentTintColor = .labelColor
-        }
-        super.draw(dirtyRect)
-    }
-
-    @objc private func handleOpen(_ recognizer: NSClickGestureRecognizer) {
-        let point = recognizer.location(in: self)
-        if let button = ejectButton, button.frame.contains(point) {
-            return
-        }
-        onOpenInFinder()
-    }
-
-    @objc private func handleEject() {
-        onEject?()
-    }
+/// ディレクトリの中身を遅延展開するためのサブメニュー。
+private final class DirectoryMenu: NSMenu {
+    var directoryURL: URL?
+    /// ボリューム直下のサブメニューのみ設定。取り出し項目を先頭に出す。
+    var volumeRow: VolumeRow?
+    var dwellTimer: Timer?
+    var loaded = false
+    var sizeUpdateGeneration = 0
 }
 
 private let diskMonitorIntroURL = URL(string: "https://apps.tomippe.jp/disk-monitor/")!
@@ -297,6 +127,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menuNameWidth = 20
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
+    private let directoryItemLimit = 300
+    private let directorySizeQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "jp.tomippe.diskmonitor.directory-size"
+        queue.maxConcurrentOperationCount = 4
+        queue.qualityOfService = .utility
+        return queue
+    }()
     private var volumeRows: [VolumeRow] = []
     private var statusText = NSLocalizedString("status.loading", comment: "")
     private var trashSizeBytes: Int64 = 0
@@ -360,7 +198,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         scheduleRefreshAfterFileSystemChange()
     }
 
-    func menuWillOpen(_: NSMenu) {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if let dirMenu = menu as? DirectoryMenu, !dirMenu.loaded {
+            showDirectoryWaitingPlaceholder(dirMenu)
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if let dirMenu = menu as? DirectoryMenu {
+            scheduleDirectoryDwellLoad(dirMenu)
+            return
+        }
         isMenuVisible = true
         rebuildMenu()
         syncLaunchAtLoginItem()
@@ -368,7 +216,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshVolumes(includeTrash: true)
     }
 
-    func menuDidClose(_: NSMenu) {
+    func menuDidClose(_ menu: NSMenu) {
+        if let dirMenu = menu as? DirectoryMenu {
+            dirMenu.dwellTimer?.invalidate()
+            dirMenu.dwellTimer = nil
+            return
+        }
         isMenuVisible = false
     }
 
@@ -896,27 +749,237 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let icon = row.icon.copy() as? NSImage ?? row.icon
         icon.size = NSSize(width: 16, height: 16)
         item.image = icon
+        item.submenu = makeDirectoryMenu(for: row.url, volumeRow: row)
+        return item
+    }
 
-        if row.showsDetachSubmenu {
-            let submenu = NSMenu()
-            let detachItem = NSMenuItem(title: "", action: #selector(detachVolumeFromMenu(_:)), keyEquivalent: "")
-            detachItem.target = self
-            detachItem.representedObject = row
-            let useUnmount = row.detachUsesUnmountLabel
-            let titleKey = useUnmount ? "menu.unmount" : "menu.eject"
-            let symbolName = useUnmount ? "externaldrive.badge.minus" : "eject.fill"
-            detachItem.title = NSLocalizedString(titleKey, comment: "")
-            let a11y = NSLocalizedString(useUnmount ? "a11y.unmount" : "a11y.eject", comment: "")
-            if let icon = NSImage(systemSymbolName: symbolName, accessibilityDescription: a11y)
-                ?? NSImage(systemSymbolName: "eject.fill", accessibilityDescription: a11y) {
-                icon.isTemplate = true
-                icon.size = NSSize(width: 14, height: 14)
-                detachItem.image = icon
+    // MARK: - ディレクトリ展開（遅延）
+
+    private func makeDirectoryMenu(for url: URL, volumeRow: VolumeRow? = nil) -> DirectoryMenu {
+        let menu = DirectoryMenu()
+        menu.directoryURL = url
+        menu.volumeRow = volumeRow
+        menu.delegate = self
+        showDirectoryWaitingPlaceholder(menu)
+        return menu
+    }
+
+    private func showDirectoryWaitingPlaceholder(_ menu: DirectoryMenu) {
+        menu.removeAllItems()
+        let item = NSMenuItem(title: NSLocalizedString("menu.directory_loading", comment: ""), action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        menu.addItem(item)
+    }
+
+    private func scheduleDirectoryDwellLoad(_ menu: DirectoryMenu) {
+        menu.dwellTimer?.invalidate()
+        guard !menu.loaded else { return }
+
+        let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self, weak menu] _ in
+            guard let self, let menu else { return }
+            menu.dwellTimer = nil
+            menu.loaded = true
+            self.populateDirectoryMenu(menu)
+            menu.update()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        menu.dwellTimer = timer
+    }
+
+    private func populateDirectoryMenu(_ menu: DirectoryMenu) {
+        menu.removeAllItems()
+        menu.sizeUpdateGeneration &+= 1
+        guard let dir = menu.directoryURL else { return }
+
+        var addedHeader = false
+        if let row = menu.volumeRow, row.showsDetachSubmenu {
+            menu.addItem(detachMenuItem(for: row))
+            addedHeader = true
+        }
+
+        let keys: [URLResourceKey] = [.isDirectoryKey, .localizedNameKey, .nameKey]
+        let contents: [URL]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            if addedHeader {
+                menu.addItem(.separator())
             }
-            submenu.addItem(detachItem)
-            item.submenu = submenu
+            let format = NSLocalizedString("menu.directory_read_error", comment: "")
+            let err = NSMenuItem(title: String(format: format, error.localizedDescription), action: nil, keyEquivalent: "")
+            err.isEnabled = false
+            menu.addItem(err)
+            return
+        }
+
+        if contents.isEmpty {
+            if addedHeader {
+                menu.addItem(.separator())
+            }
+            let empty = NSMenuItem(title: NSLocalizedString("menu.directory_empty", comment: ""), action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+
+        if addedHeader {
+            menu.addItem(.separator())
+        }
+
+        let entries: [(url: URL, isDir: Bool, name: String)] = contents.map { url in
+            let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .localizedNameKey, .nameKey])
+            let isDir = vals?.isDirectory ?? false
+            let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
+            return (url, isDir, name)
+        }.sorted { a, b in
+            if a.isDir != b.isDir { return a.isDir && !b.isDir }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+
+        let generation = menu.sizeUpdateGeneration
+        var sizedEntries: [(url: URL, isDir: Bool, name: String, item: NSMenuItem)] = []
+
+        for entry in entries.prefix(directoryItemLimit) {
+            if entry.isDir {
+                let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.url
+                item.image = directoryIcon(for: entry.url)
+                item.submenu = makeDirectoryMenu(for: entry.url)
+                item.attributedTitle = directoryEntryAttributedTitle(name: entry.name)
+                menu.addItem(item)
+                sizedEntries.append((entry.url, entry.isDir, entry.name, item))
+            } else {
+                let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.url
+                item.image = directoryIcon(for: entry.url)
+                item.attributedTitle = directoryEntryAttributedTitle(name: entry.name)
+                menu.addItem(item)
+                sizedEntries.append((entry.url, entry.isDir, entry.name, item))
+            }
+        }
+
+        scheduleDirectoryEntrySizes(menu: menu, generation: generation, entries: sizedEntries)
+
+        if entries.count > directoryItemLimit {
+            let format = NSLocalizedString("menu.directory_more", comment: "")
+            let more = NSMenuItem(
+                title: String(format: format, entries.count - directoryItemLimit),
+                action: #selector(openFileFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            more.target = self
+            more.representedObject = dir
+            menu.addItem(.separator())
+            menu.addItem(more)
+        }
+    }
+
+    private func detachMenuItem(for row: VolumeRow) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: #selector(detachVolumeFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = row
+        let useUnmount = row.detachUsesUnmountLabel
+        let titleKey = useUnmount ? "menu.unmount" : "menu.eject"
+        let symbolName = useUnmount ? "externaldrive.badge.minus" : "eject.fill"
+        item.title = NSLocalizedString(titleKey, comment: "")
+        let a11y = NSLocalizedString(useUnmount ? "a11y.unmount" : "a11y.eject", comment: "")
+        if let icon = NSImage(systemSymbolName: symbolName, accessibilityDescription: a11y)
+            ?? NSImage(systemSymbolName: "eject.fill", accessibilityDescription: a11y) {
+            icon.isTemplate = true
+            icon.size = NSSize(width: 14, height: 14)
+            item.image = icon
         }
         return item
+    }
+
+    private func directoryIcon(for url: URL) -> NSImage {
+        let img = NSWorkspace.shared.icon(forFile: url.path)
+        img.size = NSSize(width: 16, height: 16)
+        return img
+    }
+
+    @objc private func openFileFromMenu(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        _ = NSWorkspace.shared.open(url)
+    }
+
+    private func directoryEntryMenuTitle(name: String, sizeText: String = "") -> String {
+        "\(name)\t\(sizeText)\t"
+    }
+
+    private func directoryEntryAttributedTitle(name: String, sizeText: String = "") -> NSAttributedString {
+        let title = directoryEntryMenuTitle(name: name, sizeText: sizeText)
+        let baseFont = NSFont.menuFont(ofSize: 0)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: baseFont,
+            .paragraphStyle: directoryMenuParagraphStyle()
+        ]
+        let attributed = NSMutableAttributedString(string: title, attributes: attrs)
+        guard !sizeText.isEmpty else { return attributed }
+
+        let valueStart = name.count + 1
+        let valueRange = NSRange(location: valueStart, length: sizeText.count)
+        let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+        attributed.addAttribute(.font, value: italic, range: valueRange)
+        return attributed
+    }
+
+    private func directoryMenuParagraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.tabStops = [
+            NSTextTab(textAlignment: .right, location: capacityColumnTabStop, options: [:])
+        ]
+        style.defaultTabInterval = capacityColumnTabStop
+        return style
+    }
+
+    private func scheduleDirectoryEntrySizes(
+        menu: DirectoryMenu,
+        generation: Int,
+        entries: [(url: URL, isDir: Bool, name: String, item: NSMenuItem)]
+    ) {
+        for entry in entries {
+            directorySizeQueue.addOperation { [weak self, weak menu, weak item = entry.item] in
+                guard let self, let menu, let item else { return }
+                let bytes = Self.sizeBytes(at: entry.url, isDirectory: entry.isDir)
+                let sizeText = bytes.map { self.formatBytes($0, concise: false) } ?? ""
+                DispatchQueue.main.async {
+                    guard menu.sizeUpdateGeneration == generation, item.menu === menu else { return }
+                    item.attributedTitle = self.directoryEntryAttributedTitle(name: entry.name, sizeText: sizeText)
+                    menu.update()
+                }
+            }
+        }
+    }
+
+    private static func sizeBytes(at url: URL, isDirectory: Bool) -> Int64? {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .totalFileAllocatedSizeKey, .totalFileSizeKey]
+        if !isDirectory {
+            guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
+            return Int64(values.totalFileAllocatedSize ?? values.totalFileSize ?? 0)
+        }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys),
+                  values.isDirectory != true else { continue }
+            total += Int64(values.totalFileAllocatedSize ?? values.totalFileSize ?? 0)
+        }
+        return total
     }
 
     private func trashMenuItem() -> NSMenuItem {

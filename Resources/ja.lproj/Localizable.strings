@@ -17,6 +17,10 @@
 "menu.trash" = "ゴミ箱";
 "menu.empty_trash" = "ゴミ箱を空にする";
 "menu.open_disk_utility" = "ディスクユーティリティを起動";
+"menu.directory_loading" = "…";
+"menu.directory_empty" = "（空）";
+"menu.directory_read_error" = "（読み込めません: %@）";
+"menu.directory_more" = "…他 %d 件（Finderで開く）";
 "menu.eject" = "取り出し";
 "menu.unmount" = "マウント解除";
 "alert.loginitem_failed_title" = "ログイン項目を更新できませんでした";

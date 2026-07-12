@@ -17,6 +17,10 @@
 "menu.trash" = "废纸篓";
 "menu.empty_trash" = "清空废纸篓";
 "menu.open_disk_utility" = "打开磁盘工具";
+"menu.directory_loading" = "…";
+"menu.directory_empty" = "（空）";
+"menu.directory_read_error" = "（无法读取：%@）";
+"menu.directory_more" = "…另有 %d 项（在 Finder 中打开）";
 "menu.eject" = "弹出";
 "menu.unmount" = "卸载";
 "alert.loginitem_failed_title" = "无法更新登录项";
