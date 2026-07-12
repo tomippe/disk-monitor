@@ -286,7 +286,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var fileSystemChangeMonitor: FileSystemChangeMonitor?
     private var pendingFileSystemRefresh: DispatchWorkItem?
     private let trashRefreshQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.trash", qos: .utility)
-    private var volumeRefreshGeneration = 0
+    private var volumeRefreshInFlight = false
+    private var volumeRefreshPending = false
+    private var volumeRefreshPendingIncludeTrash = false
+    private var volumeRefreshStartedAt: Date?
+    private let volumeRefreshStuckTimeout: TimeInterval = 30
     private let refreshInterval: TimeInterval = 5
     private let trashRefreshInterval: TimeInterval = 30
     private var trashRefreshTimer: Timer?
@@ -320,21 +324,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fileSystemChangeMonitor = FileSystemChangeMonitor { [weak self] in
             self?.scheduleRefreshAfterFileSystemChange()
         }
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceCenter.addObserver(
+            self,
+            selector: #selector(workspaceVolumeChanged(_:)),
+            name: NSWorkspace.didMountNotification,
+            object: nil
+        )
+        workspaceCenter.addObserver(
+            self,
+            selector: #selector(workspaceVolumeChanged(_:)),
+            name: NSWorkspace.didUnmountNotification,
+            object: nil
+        )
+        refreshRootStatusQuick()
         refreshVolumes(includeTrash: true)
-        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        timer = makeRunLoopTimer(interval: refreshInterval, tolerance: 2) { [weak self] in
+            self?.refreshRootStatusQuick()
             self?.refreshVolumes()
         }
-        timer?.tolerance = 2
-        trashRefreshTimer = Timer.scheduledTimer(withTimeInterval: trashRefreshInterval, repeats: true) { [weak self] _ in
+        trashRefreshTimer = makeRunLoopTimer(interval: trashRefreshInterval, tolerance: 5) { [weak self] in
             self?.refreshTrashSize()
         }
-        trashRefreshTimer?.tolerance = 5
+    }
+
+    private func makeRunLoopTimer(interval: TimeInterval, tolerance: TimeInterval, handler: @escaping () -> Void) -> Timer {
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in handler() }
+        timer.tolerance = tolerance
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        return timer
+    }
+
+    @objc private func workspaceVolumeChanged(_: Notification) {
+        scheduleRefreshAfterFileSystemChange()
     }
 
     func menuWillOpen(_: NSMenu) {
         isMenuVisible = true
         rebuildMenu()
         syncLaunchAtLoginItem()
+        refreshRootStatusQuick()
         refreshVolumes(includeTrash: true)
     }
 
@@ -379,17 +409,82 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshVolumes(includeTrash: Bool = false) {
-        volumeRefreshGeneration += 1
-        let generation = volumeRefreshGeneration
+        if volumeRefreshInFlight {
+            if let started = volumeRefreshStartedAt,
+               Date().timeIntervalSince(started) >= volumeRefreshStuckTimeout {
+                volumeRefreshInFlight = false
+            } else {
+                volumeRefreshPending = true
+                volumeRefreshPendingIncludeTrash = volumeRefreshPendingIncludeTrash || includeTrash
+                return
+            }
+        }
+        volumeRefreshInFlight = true
+        volumeRefreshStartedAt = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let rows = Self.readVolumes()
             DispatchQueue.main.async {
-                guard let self, generation == self.volumeRefreshGeneration else { return }
+                guard let self else { return }
+                self.volumeRefreshInFlight = false
+                self.volumeRefreshStartedAt = nil
                 self.applyVolumeRows(rows)
                 if includeTrash {
                     self.refreshTrashSize()
                 }
+                if self.volumeRefreshPending {
+                    let pendingTrash = self.volumeRefreshPendingIncludeTrash
+                    self.volumeRefreshPending = false
+                    self.volumeRefreshPendingIncludeTrash = false
+                    self.refreshVolumes(includeTrash: pendingTrash)
+                }
             }
+        }
+    }
+
+    /// メニューバー表示専用。全ボリューム取得と独立し、inFlight でも常に走る。
+    private func refreshRootStatusQuick() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let snapshot = Self.readRootStatusSnapshot() else { return }
+            DispatchQueue.main.async {
+                self?.applyRootStatusSnapshot(snapshot)
+            }
+        }
+    }
+
+    private struct RootStatusSnapshot {
+        let availableBytes: Int64
+        let name: String
+        let icon: NSImage
+    }
+
+    private func applyRootStatusSnapshot(_ snapshot: RootStatusSnapshot) {
+        statusText = formatBytes(snapshot.availableBytes, concise: true)
+        statusItem.button?.title = " \(statusText)"
+        let icon = snapshot.icon
+        icon.size = NSSize(width: 18, height: 18)
+        icon.isTemplate = false
+        statusItem.button?.image = icon
+        statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.toolTip = String(
+            format: NSLocalizedString("status.tooltip", comment: ""),
+            snapshot.name,
+            formatBytes(snapshot.availableBytes, concise: false)
+        )
+
+        if let index = volumeRows.firstIndex(where: { $0.isRootFileSystem }) {
+            let old = volumeRows[index]
+            volumeRows[index] = VolumeRow(
+                url: old.url,
+                name: old.name,
+                icon: snapshot.icon,
+                availableBytes: snapshot.availableBytes,
+                isNonFreeMetric: old.isNonFreeMetric,
+                isEjectable: old.isEjectable,
+                isUnmountable: old.isUnmountable,
+                isRootFileSystem: old.isRootFileSystem,
+                kind: old.kind
+            )
+            rebuildMenuIfOpen()
         }
     }
 
@@ -403,9 +498,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func applyVolumeRows(_ rows: [VolumeRow]) {
-        // 一時的な取得失敗で直前の正常データを「取得失敗」表示に戻さない。
-        if rows.isEmpty, !volumeRows.isEmpty { return }
-        volumeRows = rows
+        if rows.isEmpty {
+            if volumeRows.isEmpty {
+                updateStatus()
+                rebuildMenuIfOpen()
+                updateFileSystemChangeMonitoring()
+            }
+            return
+        }
+
+        var merged = rows
+        let newURLs = Set(rows.map(\.url))
+        if let mountedList = Self.withTimeout(3.0, {
+            FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes])
+        }).flatMap({ $0 }) {
+            let mountedSet = Set(mountedList)
+            for old in volumeRows where !newURLs.contains(old.url) && mountedSet.contains(old.url) {
+                merged.append(old)
+            }
+        }
+        merged = Self.sortVolumeRows(merged)
+
+        volumeRows = merged
         updateStatus()
         rebuildMenuIfOpen()
         updateFileSystemChangeMonitoring()
@@ -433,14 +547,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateFileSystemChangeMonitoring() {
-        var paths = volumeRows
-            .filter { $0.kind != .network && !$0.isNonFreeMetric }
-            .map { $0.url.path }
-        // 取得失敗中もルートを監視し、復帰のきっかけを残す。
-        if paths.isEmpty {
-            paths = ["/"]
+        var paths = Set(
+            volumeRows
+                .filter { $0.kind != .network && !$0.isNonFreeMetric }
+                .map { $0.url.path }
+        )
+        paths.insert("/")
+        paths.insert("/Volumes")
+        fileSystemChangeMonitor?.update(paths: paths.sorted())
+    }
+
+    private static func sortVolumeRows(_ rows: [VolumeRow]) -> [VolumeRow] {
+        rows.sorted {
+            if $0.kind != $1.kind { return $0.kind < $1.kind }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
-        fileSystemChangeMonitor?.update(paths: paths)
     }
 
     private static func readVolumes() -> [VolumeRow] {
@@ -466,7 +587,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         var rows: [VolumeRow] = []
-        for url in urls {
+        let sortedURLs = urls.sorted { lhs, rhs in
+            if lhs.path == "/" { return true }
+            if rhs.path == "/" { return false }
+            return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
+        }
+        for url in sortedURLs {
             guard let quick = resourceValues(for: url, keys: [.volumeIsLocalKey], timeout: 2.0) else { continue }
             let isNetwork = quick.volumeIsLocal == false
             let resourceTimeout: TimeInterval = isNetwork ? 2.0 : 8.0
@@ -480,15 +606,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             let name = values.volumeLocalizedName ?? values.volumeName ?? url.lastPathComponent
             let isEjectable = values.volumeIsEjectable ?? false
-            // ネットワークボリュームへの getFileSystemInfo / diskutil は応答が遅く、UI を巻き込む原因になる。
-            let isUnmountable = isNetwork
-                ? isEjectable
-                : pathReportsUnmountable(url.path)
             let isRoot = values.volumeIsRootFileSystem ?? (url.path == "/")
-            let icon = (values.effectiveIcon as? NSImage)
-                ?? NSWorkspace.shared.icon(forFile: url.path)
-
-            let info = isNetwork ? [:] : diskInfo(for: url.path)
+            // システムボリュームは eject 対象外のため、重い diskutil / getFileSystemInfo を省略する。
+            let isUnmountable: Bool
+            let info: [String: Any]
+            if isRoot {
+                isUnmountable = false
+                info = [:]
+            } else {
+                isUnmountable = isNetwork
+                    ? isEjectable
+                    : pathReportsUnmountable(url.path)
+                info = isNetwork ? [:] : diskInfo(for: url.path)
+            }
+            let icon = volumeIcon(for: url.path, effectiveIcon: values.effectiveIcon as? NSImage)
             let kind = classifyVolume(values: values, info: info)
             let nonFreeMetric = isNonFreeMetric(values: values, info: info)
             rows.append(
@@ -506,10 +637,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
         }
 
-        return rows.sorted {
-            if $0.kind != $1.kind { return $0.kind < $1.kind }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        return sortVolumeRows(rows)
+    }
+
+    private static func readRootStatusSnapshot() -> RootStatusSnapshot? {
+        let root = URL(fileURLWithPath: "/")
+        let keys: Set<URLResourceKey> = [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+            .volumeLocalizedNameKey,
+            .volumeNameKey,
+            .effectiveIconKey,
+        ]
+        guard let values = resourceValues(for: root, keys: keys, timeout: 3.0) else { return nil }
+        let available = values.volumeAvailableCapacityForImportantUsage.flatMap { $0 > 0 ? $0 : nil }
+            ?? values.volumeAvailableCapacity.map(Int64.init)
+            ?? freeBytes(for: root)
+        guard let available else { return nil }
+        let name = values.volumeLocalizedName ?? values.volumeName ?? root.lastPathComponent
+        let icon = volumeIcon(for: root.path, effectiveIcon: values.effectiveIcon as? NSImage)
+        return RootStatusSnapshot(availableBytes: Int64(available), name: name, icon: icon)
+    }
+
+    private static func volumeIcon(for path: String, effectiveIcon: NSImage?) -> NSImage {
+        if let effectiveIcon { return effectiveIcon }
+        if let icon = withTimeout(2.0, { NSWorkspace.shared.icon(forFile: path) }) {
+            return icon
         }
+        return NSImage(systemSymbolName: "internaldrive", accessibilityDescription: nil)
+            ?? NSImage(size: NSSize(width: 18, height: 18))
     }
 
     /// `NSWorkspace.getFileSystemInfoForPath` の isUnmountable に相当。
