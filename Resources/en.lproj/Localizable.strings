@@ -30,6 +30,8 @@
 "alert.loginitem_failed_title" = "Couldn’t Update Login Item";
 "alert.eject_failed_title" = "Couldn’t Eject Volume";
 "alert.unmount_failed_title" = "Couldn’t Unmount Volume";
+"error.force_unmount_failed" = "Couldn’t force unmount the volume.";
+"auth.force_unmount.prompt" = "Disk Monitor will force unmount this volume. Open files may be affected. Enter your administrator password.";
 "alert.empty_trash_failed_title" = "Couldn’t Empty Trash";
 "alert.empty_trash_failed_message" = "Failed to empty Trash in Finder.";
 "status.loading" = "...";

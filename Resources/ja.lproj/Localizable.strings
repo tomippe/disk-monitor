@@ -30,6 +30,8 @@
 "alert.loginitem_failed_title" = "ログイン項目を更新できませんでした";
 "alert.eject_failed_title" = "取り出しに失敗しました";
 "alert.unmount_failed_title" = "マウント解除に失敗しました";
+"error.force_unmount_failed" = "強制マウント解除に失敗しました";
+"auth.force_unmount.prompt" = "Disk Monitor がボリュームを強制解除します。開いているファイルがある場合は影響する可能性があります。管理者パスワードを入力してください。";
 "alert.empty_trash_failed_title" = "ゴミ箱を空にできませんでした";
 "alert.empty_trash_failed_message" = "Finder でゴミ箱を空にする処理に失敗しました。";
 "status.loading" = "...";

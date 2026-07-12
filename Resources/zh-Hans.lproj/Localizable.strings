@@ -30,6 +30,8 @@
 "alert.loginitem_failed_title" = "无法更新登录项";
 "alert.eject_failed_title" = "无法弹出卷";
 "alert.unmount_failed_title" = "无法卸载卷";
+"error.force_unmount_failed" = "无法强制卸载卷。";
+"auth.force_unmount.prompt" = "Disk Monitor 将强制卸载此卷。打开的文件可能会受到影响。请输入管理员密码。";
 "alert.empty_trash_failed_title" = "无法清空废纸篓";
 "alert.empty_trash_failed_message" = "在 Finder 中清空废纸篓失败。";
 "status.loading" = "...";

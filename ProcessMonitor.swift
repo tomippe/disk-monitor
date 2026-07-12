@@ -85,12 +85,158 @@ private struct VolumeRow {
 
     /// サブメニューに取り出しまたはマウント解除を出すか（システムボリュームは除外）。
     var showsDetachSubmenu: Bool {
-        !isRootFileSystem && (isEjectable || (!isEjectable && isUnmountable))
+        !isRootFileSystem && (kind == .network || isEjectable || isUnmountable)
     }
 
-    /// 取り出しの代わりにマウント解除として扱うか。
+    /// 取り出しの代わりにマウント解除として扱うか（ネットワークボリュームは常にマウント解除）。
     var detachUsesUnmountLabel: Bool {
-        !isEjectable && isUnmountable
+        kind == .network || (!isEjectable && isUnmountable)
+    }
+}
+
+/// ボリュームの取り出し・マウント解除（ネットワークは 10 秒タイムアウト後に強制解除）。
+private enum VolumeDetach {
+    private static let unmountForceTimeout: TimeInterval = 10
+
+    static func detach(row: VolumeRow, completion: @escaping (String?) -> Void) {
+        if row.detachUsesUnmountLabel {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let message = unmountWithTimeoutAndForce(at: row.url)
+                DispatchQueue.main.async { completion(message) }
+            }
+        } else {
+            DispatchQueue.main.async {
+                do {
+                    try NSWorkspace.shared.unmountAndEjectDevice(at: row.url)
+                    completion(nil)
+                } catch {
+                    completion(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private static func unmountWithTimeoutAndForce(at mountURL: URL) -> String? {
+        let deadline = Date().addingTimeInterval(unmountForceTimeout)
+        let normalDone = DispatchSemaphore(value: 0)
+        var normalError: Error?
+
+        DispatchQueue.main.async {
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: mountURL)
+            } catch {
+                normalError = error
+            }
+            normalDone.signal()
+        }
+
+        while Date() < deadline {
+            if !isMountPointActive(mountURL) { return nil }
+            if normalDone.wait(timeout: .now() + 0.5) == .success {
+                while Date() < deadline {
+                    if !isMountPointActive(mountURL) { return nil }
+                    Thread.sleep(forTimeInterval: 0.5)
+                }
+                break
+            }
+        }
+
+        if !isMountPointActive(mountURL) { return nil }
+
+        let forced = forceUnmountVolume(at: mountURL)
+        Thread.sleep(forTimeInterval: 0.5)
+        if !isMountPointActive(mountURL) { return nil }
+
+        if forced.detail.isEmpty {
+            return normalError?.localizedDescription ?? NSLocalizedString("error.force_unmount_failed", comment: "")
+        }
+        return forced.detail
+    }
+
+    private static func isMountPointActive(_ mountURL: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: mountURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        return (try? mountURL.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName) != nil
+    }
+
+    private static func shellCommand(_ launchPath: String, _ arguments: [String]) -> (status: Int32, output: String) {
+        let task = Process()
+        let pipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: launchPath)
+        task.arguments = arguments
+        task.standardOutput = pipe
+        task.standardError = pipe
+        do {
+            try task.run()
+        } catch {
+            return (127, error.localizedDescription)
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return (task.terminationStatus, text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func volumeDeviceIdentifier(for mountURL: URL) -> String? {
+        let result = shellCommand("/usr/sbin/diskutil", ["info", mountURL.path])
+        guard result.status == 0 else { return nil }
+        for line in result.output.split(separator: "\n") {
+            let text = String(line)
+            guard text.contains("Device Identifier:") else { continue }
+            return text.split(separator: ":", maxSplits: 1).last.map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private static func forceUnmountVolume(at mountURL: URL) -> (success: Bool, detail: String) {
+        let path = mountURL.path
+        var lastDetail = ""
+
+        for args in [["unmount", path], ["unmount", "force", path]] {
+            let result = shellCommand("/usr/sbin/diskutil", args)
+            if result.status == 0, !isMountPointActive(mountURL) {
+                return (true, "")
+            }
+            if !result.output.isEmpty { lastDetail = result.output }
+        }
+
+        if let device = volumeDeviceIdentifier(for: mountURL) {
+            let result = shellCommand("/usr/sbin/diskutil", ["unmount", "force", device])
+            if result.status == 0, !isMountPointActive(mountURL) {
+                return (true, "")
+            }
+            if !result.output.isEmpty { lastDetail = result.output }
+        }
+
+        let umount = shellCommand("/sbin/umount", ["-f", path])
+        if umount.status == 0, !isMountPointActive(mountURL) {
+            return (true, "")
+        }
+        if !umount.output.isEmpty { lastDetail = umount.output }
+
+        if authorizedForceUnmount(path), !isMountPointActive(mountURL) {
+            return (true, "")
+        }
+
+        return (false, lastDetail.isEmpty ? NSLocalizedString("error.force_unmount_failed", comment: "") : lastDetail)
+    }
+
+    private static func authorizedForceUnmount(_ path: String) -> Bool {
+        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let prompt = NSLocalizedString("auth.force_unmount.prompt", comment: "")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = "do shell script \"/usr/sbin/diskutil unmount force \(quoted)\" with administrator privileges with prompt \"\(prompt)\""
+        guard let appleScript = NSAppleScript(source: script) else { return false }
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
+        if (error?[NSAppleScript.errorNumber] as? Int16) == -128 { return false }
+        return error == nil
     }
 }
 
@@ -536,7 +682,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 info = [:]
             } else {
                 isUnmountable = isNetwork
-                    ? isEjectable
+                    ? true
                     : pathReportsUnmountable(url.path)
                 info = isNetwork ? [:] : diskInfo(for: url.path)
             }
@@ -1044,7 +1190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.representedObject = row
         let useUnmount = row.detachUsesUnmountLabel
         let titleKey = useUnmount ? "menu.unmount" : "menu.eject"
-        let symbolName = useUnmount ? "externaldrive.badge.minus" : "eject.fill"
+        let symbolName = (useUnmount && row.kind != .network) ? "externaldrive.badge.minus" : "eject.fill"
         item.title = NSLocalizedString(titleKey, comment: "")
         let a11y = NSLocalizedString(useUnmount ? "a11y.unmount" : "a11y.eject", comment: "")
         if let icon = NSImage(systemSymbolName: symbolName, accessibilityDescription: a11y)
@@ -1134,8 +1280,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return values?.localizedName ?? values?.name ?? url.lastPathComponent
     }
 
+    /// フォルダの OS 既定ファイルマネージャ（ForkLift 等は NSFileViewer で登録される）。
+    private static func defaultFileManagerApplication() -> URL? {
+        for domainName in ["NSGlobalDomain", "com.apple.globaldomain", ".GlobalPreferences"] {
+            if let bundleId = UserDefaults.standard.persistentDomain(forName: domainName)?["NSFileViewer"] as? String,
+               let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                return url
+            }
+        }
+        if let bundleId = UserDefaults.standard.string(forKey: "NSFileViewer"),
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            return url
+        }
+        if let url = LSCopyDefaultApplicationURLForContentType("public.folder" as CFString, .all, nil)?.takeRetainedValue() as URL? {
+            return url
+        }
+        return NSWorkspace.shared.urlForApplication(toOpen: URL(fileURLWithPath: NSHomeDirectory()))
+    }
+
+    private static func defaultApplicationForOpening(_ url: URL) -> URL? {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return defaultFileManagerApplication() ?? NSWorkspace.shared.urlForApplication(toOpen: url)
+        }
+        return NSWorkspace.shared.urlForApplication(toOpen: url)
+    }
+
     private func openWithDefaultFileManager(_ url: URL) {
-        if let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+        if let appURL = Self.defaultApplicationForOpening(url) {
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
             NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config, completionHandler: nil)
@@ -1368,17 +1540,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func detachVolume(_ row: VolumeRow) {
-        do {
-            try NSWorkspace.shared.unmountAndEjectDevice(at: row.url)
-        } catch {
-            let alert = NSAlert()
-            let failTitleKey = row.isEjectable ? "alert.eject_failed_title" : "alert.unmount_failed_title"
-            alert.messageText = NSLocalizedString(failTitleKey, comment: "")
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+        VolumeDetach.detach(row: row) { [weak self] errorMessage in
+            if let errorMessage {
+                let alert = NSAlert()
+                let failTitleKey = row.detachUsesUnmountLabel ? "alert.unmount_failed_title" : "alert.eject_failed_title"
+                alert.messageText = NSLocalizedString(failTitleKey, comment: "")
+                alert.informativeText = errorMessage
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+            self?.refreshVolumes()
         }
-        refreshVolumes()
     }
 
     @objc private func copyStatus() {
