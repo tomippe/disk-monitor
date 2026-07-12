@@ -1,7 +1,28 @@
 import Cocoa
 import CoreServices
+import os
 import ServiceManagement
 import Sparkle
+
+/// パフォーマンス診断（Console.app で subsystem `jp.tomippe.diskmonitor` をフィルタ）。
+private enum DiskMonitorLog {
+    private static let log = Logger(subsystem: "jp.tomippe.diskmonitor", category: "perf")
+
+    static func slowIfNeeded(_ label: String, started: CFAbsoluteTime, thresholdMs: Double = 50, extra: String = "") {
+        let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
+        guard ms >= thresholdMs else { return }
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        log.warning("\(label, privacy: .public) \(ms, privacy: .public)ms main=\(Thread.isMainThread, privacy: .public)\(suffix, privacy: .public)")
+    }
+
+    @discardableResult
+    static func measure<T>(_ label: String, thresholdMs: Double = 50, extra: String = "", _ work: () -> T) -> T {
+        let started = CFAbsoluteTimeGetCurrent()
+        let result = work()
+        slowIfNeeded(label, started: started, thresholdMs: thresholdMs, extra: extra)
+        return result
+    }
+}
 
 private final class FileSystemChangeMonitor {
     private var stream: FSEventStreamRef?
@@ -352,6 +373,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var trashSizeBytes: Int64 = 0
     private var isMenuVisible = false
     private var favoriteSizeUpdateGeneration = 0
+    private var menuNeedsRebuild = true
+    private var pendingRootMenuVisualUpdate: DispatchWorkItem?
     private static var finderTrashSizeDenied = false
 
     func applicationWillFinishLaunching(_: Notification) {
@@ -423,7 +446,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         isMenuVisible = true
-        rebuildMenu()
+        if menuNeedsRebuild {
+            rebuildMenu()
+            menuNeedsRebuild = false
+        }
         syncLaunchAtLoginItem()
         refreshRootStatusQuick()
         refreshVolumes(includeTrash: true)
@@ -590,12 +616,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         volumeRows = merged
         updateStatus()
+        menuNeedsRebuild = true
         rebuildMenuIfOpen()
         updateFileSystemChangeMonitoring()
     }
 
     private func applyTrashSize(_ bytes: Int64) {
         trashSizeBytes = bytes
+        menuNeedsRebuild = true
         rebuildMenuIfOpen()
     }
 
@@ -632,6 +660,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func readVolumes() -> [VolumeRow] {
+        let started = CFAbsoluteTimeGetCurrent()
         let keys: [URLResourceKey] = [
             .volumeNameKey,
             .volumeLocalizedNameKey,
@@ -704,6 +733,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
         }
 
+        DiskMonitorLog.slowIfNeeded("readVolumes", started: started, thresholdMs: 100, extra: "count=\(rows.count)")
         return sortVolumeRows(rows)
     }
 
@@ -895,8 +925,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func rebuildMenu() {
         guard let menu = statusItem.menu else { return }
+        let started = CFAbsoluteTimeGetCurrent()
         favoriteSizeUpdateGeneration &+= 1
         let favoriteGeneration = favoriteSizeUpdateGeneration
+        let volumeCount = volumeRows.count
+        let favoriteCount = FavoriteStore.loadPaths().count
         menu.removeAllItems()
 
         if volumeRows.isEmpty {
@@ -962,6 +995,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(quit),
             keyEquivalent: "q"
         ))
+        DiskMonitorLog.slowIfNeeded(
+            "rebuildMenu",
+            started: started,
+            thresholdMs: 30,
+            extra: "volumes=\(volumeCount) favorites=\(favoriteCount)"
+        )
+    }
+
+    private func scheduleRootMenuVisualUpdate() {
+        pendingRootMenuVisualUpdate?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.statusItem.menu?.update()
+        }
+        pendingRootMenuVisualUpdate = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func favoriteMenuItem(for url: URL, generation: Int) -> NSMenuItem {
@@ -1032,7 +1080,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let item, self.favoriteSizeUpdateGeneration == generation else { return }
                 item.title = self.favoriteMenuTitle(name: name, sizeText: sizeText)
                 item.attributedTitle = self.favoriteMenuAttributedTitle(name: name, sizeText: sizeText)
-                item.menu?.update()
+                self.scheduleRootMenuVisualUpdate()
             }
         }
     }
@@ -1091,6 +1139,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func readDirectorySnapshot(at dir: URL) -> DirectorySnapshot {
+        let started = CFAbsoluteTimeGetCurrent()
         let keys: [URLResourceKey] = [.isDirectoryKey, .localizedNameKey, .nameKey]
         do {
             let contents = try FileManager.default.contentsOfDirectory(
@@ -1108,13 +1157,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if a.isDir != b.isDir { return a.isDir && !b.isDir }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
+            DiskMonitorLog.slowIfNeeded(
+                "readDirectorySnapshot",
+                started: started,
+                thresholdMs: 100,
+                extra: "\(dir.path) entries=\(entries.count)"
+            )
             return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
         } catch {
+            DiskMonitorLog.slowIfNeeded(
+                "readDirectorySnapshot error",
+                started: started,
+                thresholdMs: 50,
+                extra: dir.path
+            )
             return DirectorySnapshot(entries: [], totalCount: 0, error: error)
         }
     }
 
     private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
+        let started = CFAbsoluteTimeGetCurrent()
         menu.removeAllItems()
         menu.sizeUpdateGeneration &+= 1
         menu.folderSizeMenuItem = nil
@@ -1182,6 +1244,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         scheduleDirectoryEntryIcons(menu: menu, generation: generation, entries: iconEntries)
+        DiskMonitorLog.slowIfNeeded(
+            "applyDirectorySnapshot",
+            started: started,
+            thresholdMs: 50,
+            extra: "\(dir.path) items=\(snapshot.entries.count)"
+        )
     }
 
     private func detachMenuItem(for row: VolumeRow) -> NSMenuItem {
@@ -1266,6 +1334,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func removeFromFavorites(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         FavoriteStore.remove(url)
+        menuNeedsRebuild = true
         guard isMenuVisible else { return }
         rebuildMenu()
         syncLaunchAtLoginItem()
@@ -1339,10 +1408,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static func isDirectoryEntryAccessible(at url: URL, isDirectory: Bool) -> Bool {
         let fm = FileManager.default
         if isDirectory {
-            guard fm.isReadableFile(atPath: url.path), fm.isExecutableFile(atPath: url.path) else {
-                return false
-            }
-            return (try? fm.contentsOfDirectory(atPath: url.path)) != nil
+            return fm.isReadableFile(atPath: url.path) && fm.isExecutableFile(atPath: url.path)
         }
         return fm.isReadableFile(atPath: url.path)
     }
@@ -1369,7 +1435,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func scheduleDirectoryMenuVisualUpdate(_ menu: DirectoryMenu) {
         menu.pendingUpdateWorkItem?.cancel()
         let work = DispatchWorkItem { [weak menu] in
+            let started = CFAbsoluteTimeGetCurrent()
             menu?.update()
+            if let path = menu?.directoryURL?.path {
+                DiskMonitorLog.slowIfNeeded("directoryMenu.update", started: started, thresholdMs: 30, extra: path)
+            }
         }
         menu.pendingUpdateWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
@@ -1739,6 +1809,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static func calculateTrashSizeBytesWithFinder() -> Int64? {
         guard !finderTrashSizeDenied else { return nil }
+        let started = CFAbsoluteTimeGetCurrent()
         // physical size of trash returns Finder's cached value (stale after file moves).
         // Summing each item individually via index forces a fresh per-item lookup.
         // try blocks inside the script absorb transient errors (e.g. item removed mid-loop).
@@ -1775,10 +1846,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let stringValue = result.stringValue,
            let bytes = Int64(stringValue) {
+            DiskMonitorLog.slowIfNeeded("trashSizeFinder", started: started, thresholdMs: 200)
             return bytes
         }
         let intValue = result.int32Value
-        return intValue >= 0 ? Int64(intValue) : nil
+        let bytes = intValue >= 0 ? Int64(intValue) : nil
+        DiskMonitorLog.slowIfNeeded("trashSizeFinder", started: started, thresholdMs: 200)
+        return bytes
     }
 
     private static func emptyTrashWithFinder() -> (cancelled: Bool, errorMessage: String?) {
