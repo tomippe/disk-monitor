@@ -122,43 +122,44 @@ private enum DirectoryFavoriteMode {
 private enum FavoriteStore {
     private static let key = "DiskMonitorFavoriteFolders"
 
-    static func load() -> [URL] {
+    static func loadPaths() -> [String] {
         guard let paths = UserDefaults.standard.stringArray(forKey: key) else { return [] }
         var seen = Set<String>()
-        return paths.compactMap { path in
-            guard !seen.contains(path) else { return nil }
+        return paths.filter { path in
+            guard !seen.contains(path) else { return false }
             seen.insert(path)
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
-                return nil
-            }
-            return URL(fileURLWithPath: path, isDirectory: true)
+            return true
         }
     }
 
-    static func save(_ urls: [URL]) {
-        UserDefaults.standard.set(urls.map(\.path), forKey: key)
+    static func load() -> [URL] {
+        loadPaths().map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    private static func savePaths(_ paths: [String]) {
+        UserDefaults.standard.set(paths, forKey: key)
+    }
+
+    static func isAvailable(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
     }
 
     static func contains(_ url: URL) -> Bool {
-        load().contains { $0.path == url.path }
+        loadPaths().contains(url.path)
     }
 
     static func add(_ url: URL) {
-        var urls = load()
-        guard !urls.contains(where: { $0.path == url.path }) else { return }
-        urls.append(url)
-        save(urls)
+        var paths = loadPaths()
+        guard !paths.contains(url.path) else { return }
+        paths.append(url.path)
+        savePaths(paths)
     }
 
     static func remove(_ url: URL) {
-        var urls = load()
-        urls.removeAll { $0.path == url.path }
-        save(urls)
-    }
-
-    static func pruneMissing() {
-        save(load())
+        var paths = loadPaths()
+        paths.removeAll { $0 == url.path }
+        savePaths(paths)
     }
 }
 
@@ -241,7 +242,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSWorkspace.didUnmountNotification,
             object: nil
         )
-        FavoriteStore.pruneMissing()
         refreshRootStatusQuick()
         refreshVolumes(includeTrash: true)
         timer = makeRunLoopTimer(interval: refreshInterval, tolerance: 2) { [weak self] in
@@ -819,35 +819,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func favoriteMenuItem(for url: URL, generation: Int) -> NSMenuItem {
+        let available = FavoriteStore.isAvailable(url)
         let name = ellipsized(Self.displayName(for: url), maxLength: menuNameWidth)
         let item = NSMenuItem(title: favoriteMenuTitle(name: name), action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = url
         item.attributedTitle = favoriteMenuAttributedTitle(name: name)
         item.image = directoryEntryPlaceholderIcon(isDirectory: true)
-        item.submenu = makeDirectoryMenu(for: url, favoriteMode: .favorite)
-        scheduleFavoriteItemSize(item: item, url: url, name: name, generation: generation)
-        DispatchQueue.global(qos: .utility).async {
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 16, height: 16)
-            DispatchQueue.main.async {
-                item.image = icon
+        if available {
+            item.submenu = makeDirectoryMenu(for: url, favoriteMode: .favorite)
+            scheduleFavoriteItemSize(item: item, url: url, name: name, generation: generation)
+            DispatchQueue.global(qos: .utility).async {
+                let icon = NSWorkspace.shared.icon(forFile: url.path)
+                icon.size = NSSize(width: 16, height: 16)
+                DispatchQueue.main.async {
+                    item.image = icon
+                }
             }
+        } else {
+            item.action = nil
+            item.attributedTitle = favoriteMenuAttributedTitle(name: name, unavailable: true)
+            item.submenu = unavailableFavoriteSubmenu(for: url)
         }
         return item
+    }
+
+    private func unavailableFavoriteSubmenu(for url: URL) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(removeFromFavoritesMenuItem(for: url))
+        return menu
     }
 
     private func favoriteMenuTitle(name: String, sizeText: String = "") -> String {
         "\(name)\t\(sizeText)\t"
     }
 
-    private func favoriteMenuAttributedTitle(name: String, sizeText: String = "") -> NSAttributedString {
+    private func favoriteMenuAttributedTitle(name: String, sizeText: String = "", unavailable: Bool = false) -> NSAttributedString {
         let title = favoriteMenuTitle(name: name, sizeText: sizeText)
         let baseFont = NSFont.menuFont(ofSize: 0)
-        let attrs: [NSAttributedString.Key: Any] = [
+        var attrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .paragraphStyle: volumeMenuParagraphStyle()
         ]
+        if unavailable {
+            attrs[.foregroundColor] = NSColor.disabledControlTextColor
+        }
         let attributed = NSMutableAttributedString(string: title, attributes: attrs)
         guard !sizeText.isEmpty else { return attributed }
 
@@ -855,6 +871,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let valueRange = NSRange(location: valueStart, length: sizeText.count)
         let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
         attributed.addAttribute(.font, value: italic, range: valueRange)
+        if unavailable {
+            attributed.addAttribute(.foregroundColor, value: NSColor.disabledControlTextColor, range: valueRange)
+        }
         return attributed
     }
 
@@ -972,7 +991,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .favorite:
             menu.addItem(removeFromFavoritesMenuItem(for: dir))
         case .browse:
-            if !FavoriteStore.contains(dir) {
+            if menu.volumeRow == nil, !FavoriteStore.contains(dir) {
                 menu.addItem(addToFavoritesMenuItem(for: dir))
             }
         }
@@ -1107,6 +1126,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func displayName(for url: URL) -> String {
+        guard FavoriteStore.isAvailable(url) else {
+            return url.lastPathComponent
+        }
         let keys: Set<URLResourceKey> = [.localizedNameKey, .nameKey]
         let values = try? url.resourceValues(forKeys: keys)
         return values?.localizedName ?? values?.name ?? url.lastPathComponent
