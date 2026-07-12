@@ -1299,6 +1299,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func defaultApplicationForOpening(_ url: URL) -> URL? {
+        if isApplicationBundle(at: url) {
+            return NSWorkspace.shared.urlForApplication(toOpen: url)
+        }
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
             return defaultFileManagerApplication() ?? NSWorkspace.shared.urlForApplication(toOpen: url)
@@ -1307,6 +1310,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openWithDefaultFileManager(_ url: URL) {
+        if Self.isApplicationBundle(at: url) {
+            _ = NSWorkspace.shared.open(url)
+            return
+        }
         if let appURL = Self.defaultApplicationForOpening(url) {
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
@@ -1322,7 +1329,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func isBrowsableDirectory(at url: URL) -> Bool {
-        url.pathExtension.lowercased() != "app"
+        !isApplicationBundle(at: url)
+    }
+
+    private static func isApplicationBundle(at url: URL) -> Bool {
+        url.pathExtension.lowercased() == "app"
     }
 
     private static func isDirectoryEntryAccessible(at url: URL, isDirectory: Bool) -> Bool {
