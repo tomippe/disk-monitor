@@ -18,10 +18,11 @@
 "menu.empty_trash" = "Empty Trash";
 "menu.open_disk_utility" = "Open Disk Utility";
 "menu.directory_loading" = "…";
-"menu.directory_size_calculating" = "Calculating size...";
+"menu.directory_summary_items" = "%d items";
+"menu.directory_summary_items_size" = "%d items - %@";
+"menu.directory_summary_separator" = " - ";
 "menu.directory_empty" = "(Empty)";
 "menu.directory_read_error" = "(Can’t read: %@)";
-"menu.directory_more" = "…%d more (Open in Finder)";
 "menu.eject" = "Eject";
 "menu.unmount" = "Unmount";
 "alert.loginitem_failed_title" = "Couldn’t Update Login Item";

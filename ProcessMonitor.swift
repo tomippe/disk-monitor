@@ -104,6 +104,7 @@ private final class DirectoryMenu: NSMenu {
     var sizeUpdateGeneration = 0
     var pendingUpdateWorkItem: DispatchWorkItem?
     var folderSizeMenuItem: NSMenuItem?
+    var folderItemCount = 0
 }
 
 private struct DirectorySnapshot {
@@ -135,7 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menuNameWidth = 20
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
-    private let directoryItemLimit = 60
     private let directoryFolderSizeTimeout: TimeInterval = 2
     private let directorySizeQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -841,14 +841,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let dir = menu.directoryURL else { return }
 
         let generation = menu.sizeUpdateGeneration
-        let sizeItem = NSMenuItem(
-            title: NSLocalizedString("menu.directory_size_calculating", comment: ""),
-            action: nil,
+        let itemCount = snapshot.error == nil ? snapshot.totalCount : 0
+        menu.folderItemCount = itemCount
+        let summaryItem = NSMenuItem(
+            title: directoryFolderSummaryTitle(itemCount: itemCount),
+            action: #selector(openFileFromMenu(_:)),
             keyEquivalent: ""
         )
-        sizeItem.isEnabled = false
-        menu.folderSizeMenuItem = sizeItem
-        menu.addItem(sizeItem)
+        summaryItem.target = self
+        summaryItem.representedObject = dir
+        menu.folderSizeMenuItem = summaryItem
+        menu.addItem(summaryItem)
         menu.addItem(.separator())
         scheduleDirectoryFolderSize(menu: menu, generation: generation, url: dir)
 
@@ -866,21 +869,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if snapshot.entries.isEmpty {
-            let empty = NSMenuItem(title: NSLocalizedString("menu.directory_empty", comment: ""), action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
             return
         }
 
         var iconEntries: [(url: URL, item: NSMenuItem)] = []
 
-        for entry in snapshot.entries.prefix(directoryItemLimit) {
+        for entry in snapshot.entries {
             let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = entry.url
             item.image = directoryEntryPlaceholderIcon(isDirectory: entry.isDir)
             if entry.isAccessible {
-                if entry.isDir {
+                if entry.isDir, Self.isBrowsableDirectory(at: entry.url) {
                     item.submenu = makeDirectoryMenu(for: entry.url)
                 }
             } else {
@@ -892,19 +892,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         scheduleDirectoryEntryIcons(menu: menu, generation: generation, entries: iconEntries)
-
-        if snapshot.totalCount > directoryItemLimit {
-            let format = NSLocalizedString("menu.directory_more", comment: "")
-            let more = NSMenuItem(
-                title: String(format: format, snapshot.totalCount - directoryItemLimit),
-                action: #selector(openFileFromMenu(_:)),
-                keyEquivalent: ""
-            )
-            more.target = self
-            more.representedObject = dir
-            menu.addItem(.separator())
-            menu.addItem(more)
-        }
     }
 
     private func detachMenuItem(for row: VolumeRow) -> NSMenuItem {
@@ -958,6 +945,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = NSWorkspace.shared.open(url)
     }
 
+    private static func isBrowsableDirectory(at url: URL) -> Bool {
+        url.pathExtension.lowercased() != "app"
+    }
+
     private static func isDirectoryEntryAccessible(at url: URL, isDirectory: Bool) -> Bool {
         let fm = FileManager.default
         if isDirectory {
@@ -969,10 +960,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return fm.isReadableFile(atPath: url.path)
     }
 
-    private func directoryFolderSizeAttributedTitle(_ sizeText: String) -> NSAttributedString {
+    private func directoryFolderSummaryTitle(itemCount: Int, sizeText: String? = nil) -> String {
+        if let sizeText {
+            return String(format: NSLocalizedString("menu.directory_summary_items_size", comment: ""), itemCount, sizeText)
+        }
+        return String(format: NSLocalizedString("menu.directory_summary_items", comment: ""), itemCount)
+    }
+
+    private func directoryFolderSummaryAttributedTitle(itemCount: Int, sizeText: String) -> NSAttributedString {
+        let prefix = String(format: NSLocalizedString("menu.directory_summary_items", comment: ""), itemCount)
+        let separator = NSLocalizedString("menu.directory_summary_separator", comment: "")
+        let full = "\(prefix)\(separator)\(sizeText)"
         let baseFont = NSFont.menuFont(ofSize: 0)
+        let attributed = NSMutableAttributedString(string: full, attributes: [.font: baseFont])
+        let sizeStart = prefix.count + separator.count
         let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-        return NSAttributedString(string: sizeText, attributes: [.font: italic])
+        attributed.addAttribute(.font, value: italic, range: NSRange(location: sizeStart, length: sizeText.count))
+        return attributed
     }
 
     private func scheduleDirectoryMenuVisualUpdate(_ menu: DirectoryMenu) {
@@ -987,15 +991,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func scheduleDirectoryFolderSize(menu: DirectoryMenu, generation: Int, url: URL) {
         directorySizeQueue.addOperation { [weak self, weak menu] in
             guard let self, let menu else { return }
+            let itemCount = menu.folderItemCount
             let bytes = Self.directorySizeViaDu(at: url, timeout: self.directoryFolderSizeTimeout)
-            let title = bytes.map { self.formatBytes($0, concise: false) }
-                ?? NSLocalizedString("status.unavailable", comment: "")
             DispatchQueue.main.async {
                 guard menu.sizeUpdateGeneration == generation,
-                      let sizeItem = menu.folderSizeMenuItem,
-                      sizeItem.menu === menu else { return }
-                sizeItem.title = title
-                sizeItem.attributedTitle = self.directoryFolderSizeAttributedTitle(title)
+                      let summaryItem = menu.folderSizeMenuItem,
+                      summaryItem.menu === menu else { return }
+                if let bytes {
+                    let sizeText = self.formatBytes(bytes, concise: false)
+                    summaryItem.title = self.directoryFolderSummaryTitle(itemCount: itemCount, sizeText: sizeText)
+                    summaryItem.attributedTitle = self.directoryFolderSummaryAttributedTitle(itemCount: itemCount, sizeText: sizeText)
+                } else {
+                    summaryItem.title = self.directoryFolderSummaryTitle(itemCount: itemCount)
+                    summaryItem.attributedTitle = nil
+                }
                 self.scheduleDirectoryMenuVisualUpdate(menu)
             }
         }
