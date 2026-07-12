@@ -21,6 +21,8 @@
 "menu.directory_summary_items" = "%d 項目";
 "menu.directory_summary_items_size" = "%d 項目 - %@";
 "menu.directory_summary_separator" = " - ";
+"menu.add_to_favorites" = "お気に入りに追加";
+"menu.remove_from_favorites" = "お気に入りから取り除く";
 "menu.directory_empty" = "（空）";
 "menu.directory_read_error" = "（読み込めません: %@）";
 "menu.eject" = "取り出し";

@@ -21,6 +21,8 @@
 "menu.directory_summary_items" = "%d 项";
 "menu.directory_summary_items_size" = "%d 项 - %@";
 "menu.directory_summary_separator" = " - ";
+"menu.add_to_favorites" = "添加到个人收藏";
+"menu.remove_from_favorites" = "从个人收藏中移除";
 "menu.directory_empty" = "（空）";
 "menu.directory_read_error" = "（无法读取：%@）";
 "menu.eject" = "弹出";

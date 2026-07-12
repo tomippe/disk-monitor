@@ -105,12 +105,61 @@ private final class DirectoryMenu: NSMenu {
     var pendingUpdateWorkItem: DispatchWorkItem?
     var folderSizeMenuItem: NSMenuItem?
     var folderItemCount = 0
+    var favoriteMode: DirectoryFavoriteMode = .browse
 }
 
 private struct DirectorySnapshot {
     let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool)]
     let totalCount: Int
     let error: Error?
+}
+
+private enum DirectoryFavoriteMode {
+    case browse
+    case favorite
+}
+
+private enum FavoriteStore {
+    private static let key = "DiskMonitorFavoriteFolders"
+
+    static func load() -> [URL] {
+        guard let paths = UserDefaults.standard.stringArray(forKey: key) else { return [] }
+        var seen = Set<String>()
+        return paths.compactMap { path in
+            guard !seen.contains(path) else { return nil }
+            seen.insert(path)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+                return nil
+            }
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+    }
+
+    static func save(_ urls: [URL]) {
+        UserDefaults.standard.set(urls.map(\.path), forKey: key)
+    }
+
+    static func contains(_ url: URL) -> Bool {
+        load().contains { $0.path == url.path }
+    }
+
+    static func add(_ url: URL) {
+        var urls = load()
+        guard !urls.contains(where: { $0.path == url.path }) else { return }
+        urls.append(url)
+        save(urls)
+    }
+
+    static func remove(_ url: URL) {
+        var urls = load()
+        urls.removeAll { $0.path == url.path }
+        save(urls)
+    }
+
+    static func pruneMissing() {
+        save(load())
+    }
 }
 
 private let diskMonitorIntroURL = URL(string: "https://apps.tomippe.jp/disk-monitor/")!
@@ -155,6 +204,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusText = NSLocalizedString("status.loading", comment: "")
     private var trashSizeBytes: Int64 = 0
     private var isMenuVisible = false
+    private var favoriteSizeUpdateGeneration = 0
     private static var finderTrashSizeDenied = false
 
     func applicationWillFinishLaunching(_: Notification) {
@@ -191,6 +241,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSWorkspace.didUnmountNotification,
             object: nil
         )
+        FavoriteStore.pruneMissing()
         refreshRootStatusQuick()
         refreshVolumes(includeTrash: true)
         timer = makeRunLoopTimer(interval: refreshInterval, tolerance: 2) { [weak self] in
@@ -698,6 +749,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func rebuildMenu() {
         guard let menu = statusItem.menu else { return }
+        favoriteSizeUpdateGeneration &+= 1
+        let favoriteGeneration = favoriteSizeUpdateGeneration
         menu.removeAllItems()
 
         if volumeRows.isEmpty {
@@ -710,7 +763,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
+        let favorites = FavoriteStore.load()
         menu.addItem(.separator())
+        if !favorites.isEmpty {
+            for url in favorites {
+                menu.addItem(favoriteMenuItem(for: url, generation: favoriteGeneration))
+            }
+            menu.addItem(.separator())
+        }
         menu.addItem(trashMenuItem())
         menu.addItem(.separator())
         menu.addItem(sectionMenuItem(NSLocalizedString("menu.copy_status", comment: ""), #selector(copyStatus), "c", symbolName: "doc.on.doc"))
@@ -758,6 +818,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ))
     }
 
+    private func favoriteMenuItem(for url: URL, generation: Int) -> NSMenuItem {
+        let name = ellipsized(Self.displayName(for: url), maxLength: menuNameWidth)
+        let item = NSMenuItem(title: favoriteMenuTitle(name: name), action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = url
+        item.attributedTitle = favoriteMenuAttributedTitle(name: name)
+        item.image = directoryEntryPlaceholderIcon(isDirectory: true)
+        item.submenu = makeDirectoryMenu(for: url, favoriteMode: .favorite)
+        scheduleFavoriteItemSize(item: item, url: url, name: name, generation: generation)
+        DispatchQueue.global(qos: .utility).async {
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 16, height: 16)
+            DispatchQueue.main.async {
+                item.image = icon
+            }
+        }
+        return item
+    }
+
+    private func favoriteMenuTitle(name: String, sizeText: String = "") -> String {
+        "\(name)\t\(sizeText)\t"
+    }
+
+    private func favoriteMenuAttributedTitle(name: String, sizeText: String = "") -> NSAttributedString {
+        let title = favoriteMenuTitle(name: name, sizeText: sizeText)
+        let baseFont = NSFont.menuFont(ofSize: 0)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: baseFont,
+            .paragraphStyle: volumeMenuParagraphStyle()
+        ]
+        let attributed = NSMutableAttributedString(string: title, attributes: attrs)
+        guard !sizeText.isEmpty else { return attributed }
+
+        let valueStart = name.count + 1
+        let valueRange = NSRange(location: valueStart, length: sizeText.count)
+        let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+        attributed.addAttribute(.font, value: italic, range: valueRange)
+        return attributed
+    }
+
+    private func scheduleFavoriteItemSize(item: NSMenuItem, url: URL, name: String, generation: Int) {
+        directorySizeQueue.addOperation { [weak self, weak item] in
+            guard let self else { return }
+            let bytes = Self.directorySizeViaDu(at: url, timeout: self.directoryFolderSizeTimeout)
+            let sizeText = bytes.map { self.formatBytes($0, concise: false) } ?? ""
+            DispatchQueue.main.async { [weak item] in
+                guard let item, self.favoriteSizeUpdateGeneration == generation else { return }
+                item.title = self.favoriteMenuTitle(name: name, sizeText: sizeText)
+                item.attributedTitle = self.favoriteMenuAttributedTitle(name: name, sizeText: sizeText)
+                item.menu?.update()
+            }
+        }
+    }
+
     private func volumeMenuItem(for row: VolumeRow) -> NSMenuItem {
         let item = NSMenuItem(title: volumeMenuTitle(for: row), action: #selector(openVolumeFromMenu(_:)), keyEquivalent: "")
         item.target = self
@@ -772,10 +886,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - ディレクトリ展開（遅延）
 
-    private func makeDirectoryMenu(for url: URL, volumeRow: VolumeRow? = nil) -> DirectoryMenu {
+    private func makeDirectoryMenu(for url: URL, volumeRow: VolumeRow? = nil, favoriteMode: DirectoryFavoriteMode = .browse) -> DirectoryMenu {
         let menu = DirectoryMenu()
         menu.directoryURL = url
         menu.volumeRow = volumeRow
+        menu.favoriteMode = favoriteMode
         menu.delegate = self
         showDirectoryWaitingPlaceholder(menu)
         return menu
@@ -852,6 +967,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         summaryItem.representedObject = dir
         menu.folderSizeMenuItem = summaryItem
         menu.addItem(summaryItem)
+
+        switch menu.favoriteMode {
+        case .favorite:
+            menu.addItem(removeFromFavoritesMenuItem(for: dir))
+        case .browse:
+            if !FavoriteStore.contains(dir) {
+                menu.addItem(addToFavoritesMenuItem(for: dir))
+            }
+        }
+
         menu.addItem(.separator())
         scheduleDirectoryFolderSize(menu: menu, generation: generation, url: dir)
 
@@ -940,9 +1065,66 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func addToFavoritesMenuItem(for url: URL) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: NSLocalizedString("menu.add_to_favorites", comment: ""),
+            action: #selector(addToFavorites(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = url
+        return item
+    }
+
+    private func removeFromFavoritesMenuItem(for url: URL) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: NSLocalizedString("menu.remove_from_favorites", comment: ""),
+            action: #selector(removeFromFavorites(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = url
+        return item
+    }
+
+    @objc private func addToFavorites(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL,
+              let menu = sender.menu as? DirectoryMenu,
+              let dir = menu.directoryURL else { return }
+        FavoriteStore.add(url)
+        guard menu.loaded else { return }
+        let snapshot = Self.readDirectorySnapshot(at: dir)
+        applyDirectorySnapshot(snapshot, to: menu, volumeRow: menu.volumeRow)
+        menu.update()
+    }
+
+    @objc private func removeFromFavorites(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        FavoriteStore.remove(url)
+        guard isMenuVisible else { return }
+        rebuildMenu()
+        syncLaunchAtLoginItem()
+    }
+
+    private static func displayName(for url: URL) -> String {
+        let keys: Set<URLResourceKey> = [.localizedNameKey, .nameKey]
+        let values = try? url.resourceValues(forKeys: keys)
+        return values?.localizedName ?? values?.name ?? url.lastPathComponent
+    }
+
+    private func openWithDefaultFileManager(_ url: URL) {
+        if let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config, completionHandler: nil)
+        } else {
+            _ = NSWorkspace.shared.open(url)
+        }
+    }
+
     @objc private func openFileFromMenu(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
-        _ = NSWorkspace.shared.open(url)
+        openWithDefaultFileManager(url)
     }
 
     private static func isBrowsableDirectory(at url: URL) -> Bool {
@@ -1127,7 +1309,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openInFinder(_ row: VolumeRow) {
-        _ = NSWorkspace.shared.open(row.url)
+        openWithDefaultFileManager(row.url)
     }
 
     @objc private func openVolumeFromMenu(_ sender: NSMenuItem) {
@@ -1137,7 +1319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func openTrash() {
         let trashURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash", isDirectory: true)
-        _ = NSWorkspace.shared.open(trashURL)
+        openWithDefaultFileManager(trashURL)
     }
 
     @objc private func openTrashFromMenu() {
