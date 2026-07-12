@@ -102,6 +102,13 @@ private final class DirectoryMenu: NSMenu {
     var dwellTimer: Timer?
     var loaded = false
     var sizeUpdateGeneration = 0
+    var pendingUpdateWorkItem: DispatchWorkItem?
+}
+
+private struct DirectorySnapshot {
+    let entries: [(url: URL, isDir: Bool, name: String)]
+    let totalCount: Int
+    let error: Error?
 }
 
 private let diskMonitorIntroURL = URL(string: "https://apps.tomippe.jp/disk-monitor/")!
@@ -127,11 +134,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menuNameWidth = 20
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
-    private let directoryItemLimit = 300
+    private let directoryNameWidth = 28
+    private let directoryCapacityColumnTabStop: CGFloat = 168
+    private let directoryItemLimit = 60
+    private let directoryFolderSizeTimeout: TimeInterval = 2
     private let directorySizeQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "jp.tomippe.diskmonitor.directory-size"
-        queue.maxConcurrentOperationCount = 4
+        queue.maxConcurrentOperationCount = 2
         queue.qualityOfService = .utility
         return queue
     }()
@@ -220,6 +230,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let dirMenu = menu as? DirectoryMenu {
             dirMenu.dwellTimer?.invalidate()
             dirMenu.dwellTimer = nil
+            dirMenu.pendingUpdateWorkItem?.cancel()
+            dirMenu.pendingUpdateWorkItem = nil
+            dirMenu.sizeUpdateGeneration &+= 1
             return
         }
         isMenuVisible = false
@@ -383,11 +396,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenuIfOpen()
     }
 
-    /// メニュー非表示時に rebuildMenu すると無駄なメインスレッド負荷になるため、開いているときだけ再構築する。
+    /// メニュー表示中のフル再構築はサブメニュー展開状態を壊すため行わない。
     private func rebuildMenuIfOpen() {
         guard isMenuVisible else { return }
-        rebuildMenu()
-        syncLaunchAtLoginItem()
     }
 
     private func scheduleRefreshAfterFileSystemChange() {
@@ -776,36 +787,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !menu.loaded else { return }
 
         let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self, weak menu] _ in
-            guard let self, let menu else { return }
+            guard let self, let menu, let dir = menu.directoryURL else { return }
             menu.dwellTimer = nil
             menu.loaded = true
-            self.populateDirectoryMenu(menu)
-            menu.update()
+            let volumeRow = menu.volumeRow
+            DispatchQueue.global(qos: .utility).async {
+                let snapshot = Self.readDirectorySnapshot(at: dir)
+                DispatchQueue.main.async { [weak self, weak menu] in
+                    guard let self, let menu, menu.directoryURL == dir else { return }
+                    self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                    menu.update()
+                }
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         menu.dwellTimer = timer
     }
 
-    private func populateDirectoryMenu(_ menu: DirectoryMenu) {
+    private static func readDirectorySnapshot(at dir: URL) -> DirectorySnapshot {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .localizedNameKey, .nameKey]
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            )
+            let entries: [(url: URL, isDir: Bool, name: String)] = contents.map { url in
+                let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .localizedNameKey, .nameKey])
+                let isDir = vals?.isDirectory ?? false
+                let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
+                return (url, isDir, name)
+            }.sorted { a, b in
+                if a.isDir != b.isDir { return a.isDir && !b.isDir }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+            return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
+        } catch {
+            return DirectorySnapshot(entries: [], totalCount: 0, error: error)
+        }
+    }
+
+    private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
         menu.removeAllItems()
         menu.sizeUpdateGeneration &+= 1
         guard let dir = menu.directoryURL else { return }
 
         var addedHeader = false
-        if let row = menu.volumeRow, row.showsDetachSubmenu {
+        if let row = volumeRow, row.showsDetachSubmenu {
             menu.addItem(detachMenuItem(for: row))
             addedHeader = true
         }
 
-        let keys: [URLResourceKey] = [.isDirectoryKey, .localizedNameKey, .nameKey]
-        let contents: [URL]
-        do {
-            contents = try FileManager.default.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: keys,
-                options: [.skipsHiddenFiles]
-            )
-        } catch {
+        if let error = snapshot.error {
             if addedHeader {
                 menu.addItem(.separator())
             }
@@ -816,7 +849,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        if contents.isEmpty {
+        if snapshot.entries.isEmpty {
             if addedHeader {
                 menu.addItem(.separator())
             }
@@ -830,46 +863,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        let entries: [(url: URL, isDir: Bool, name: String)] = contents.map { url in
-            let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .localizedNameKey, .nameKey])
-            let isDir = vals?.isDirectory ?? false
-            let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
-            return (url, isDir, name)
-        }.sorted { a, b in
-            if a.isDir != b.isDir { return a.isDir && !b.isDir }
-            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-
         let generation = menu.sizeUpdateGeneration
         var sizedEntries: [(url: URL, isDir: Bool, name: String, item: NSMenuItem)] = []
 
-        for entry in entries.prefix(directoryItemLimit) {
+        for entry in snapshot.entries.prefix(directoryItemLimit) {
+            let displayName = directoryDisplayName(entry.name)
+            let item = NSMenuItem(title: displayName, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = entry.url
+            item.image = directoryEntryIcon(isDirectory: entry.isDir)
+            item.attributedTitle = directoryEntryAttributedTitle(name: displayName)
             if entry.isDir {
-                let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = entry.url
-                item.image = directoryIcon(for: entry.url)
                 item.submenu = makeDirectoryMenu(for: entry.url)
-                item.attributedTitle = directoryEntryAttributedTitle(name: entry.name)
-                menu.addItem(item)
-                sizedEntries.append((entry.url, entry.isDir, entry.name, item))
-            } else {
-                let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = entry.url
-                item.image = directoryIcon(for: entry.url)
-                item.attributedTitle = directoryEntryAttributedTitle(name: entry.name)
-                menu.addItem(item)
-                sizedEntries.append((entry.url, entry.isDir, entry.name, item))
             }
+            menu.addItem(item)
+            sizedEntries.append((entry.url, entry.isDir, displayName, item))
         }
 
         scheduleDirectoryEntrySizes(menu: menu, generation: generation, entries: sizedEntries)
 
-        if entries.count > directoryItemLimit {
+        if snapshot.totalCount > directoryItemLimit {
             let format = NSLocalizedString("menu.directory_more", comment: "")
             let more = NSMenuItem(
-                title: String(format: format, entries.count - directoryItemLimit),
+                title: String(format: format, snapshot.totalCount - directoryItemLimit),
                 action: #selector(openFileFromMenu(_:)),
                 keyEquivalent: ""
             )
@@ -898,8 +914,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    private func directoryIcon(for url: URL) -> NSImage {
-        let img = NSWorkspace.shared.icon(forFile: url.path)
+    private func directoryEntryIcon(isDirectory: Bool) -> NSImage {
+        let symbol = isDirectory ? "folder" : "doc"
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage()
+        img.isTemplate = !isDirectory
         img.size = NSSize(width: 16, height: 16)
         return img
     }
@@ -909,8 +927,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = NSWorkspace.shared.open(url)
     }
 
+    private func directoryDisplayName(_ name: String) -> String {
+        ellipsized(name, maxLength: directoryNameWidth)
+    }
+
     private func directoryEntryMenuTitle(name: String, sizeText: String = "") -> String {
-        "\(name)\t\(sizeText)\t"
+        "\(name)\t\(sizeText)"
     }
 
     private func directoryEntryAttributedTitle(name: String, sizeText: String = "") -> NSAttributedString {
@@ -933,10 +955,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func directoryMenuParagraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.tabStops = [
-            NSTextTab(textAlignment: .right, location: capacityColumnTabStop, options: [:])
+            NSTextTab(textAlignment: .right, location: directoryCapacityColumnTabStop, options: [:])
         ]
-        style.defaultTabInterval = capacityColumnTabStop
+        style.defaultTabInterval = directoryCapacityColumnTabStop
         return style
+    }
+
+    private func scheduleDirectoryMenuVisualUpdate(_ menu: DirectoryMenu) {
+        menu.pendingUpdateWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak menu] in
+            menu?.update()
+        }
+        menu.pendingUpdateWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func scheduleDirectoryEntrySizes(
@@ -947,39 +978,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for entry in entries {
             directorySizeQueue.addOperation { [weak self, weak menu, weak item = entry.item] in
                 guard let self, let menu, let item else { return }
-                let bytes = Self.sizeBytes(at: entry.url, isDirectory: entry.isDir)
+                let bytes = Self.sizeBytes(at: entry.url, isDirectory: entry.isDir, folderTimeout: self.directoryFolderSizeTimeout)
                 let sizeText = bytes.map { self.formatBytes($0, concise: false) } ?? ""
                 DispatchQueue.main.async {
                     guard menu.sizeUpdateGeneration == generation, item.menu === menu else { return }
                     item.attributedTitle = self.directoryEntryAttributedTitle(name: entry.name, sizeText: sizeText)
-                    menu.update()
+                    self.scheduleDirectoryMenuVisualUpdate(menu)
                 }
             }
         }
     }
 
-    private static func sizeBytes(at url: URL, isDirectory: Bool) -> Int64? {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .totalFileAllocatedSizeKey, .totalFileSizeKey]
+    private static func sizeBytes(at url: URL, isDirectory: Bool, folderTimeout: TimeInterval) -> Int64? {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .totalFileSizeKey]
         if !isDirectory {
             guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
             return Int64(values.totalFileAllocatedSize ?? values.totalFileSize ?? 0)
         }
+        return directorySizeViaDu(at: url, timeout: folderTimeout)
+    }
 
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
-        ) else {
+    private static func directorySizeViaDu(at url: URL, timeout: TimeInterval) -> Int64? {
+        let task = Process()
+        let pipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/du")
+        task.arguments = ["-sk", url.path]
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+        } catch {
             return nil
         }
 
-        var total: Int64 = 0
-        for case let fileURL as URL in enumerator {
-            guard let values = try? fileURL.resourceValues(forKeys: keys),
-                  values.isDirectory != true else { continue }
-            total += Int64(values.totalFileAllocatedSize ?? values.totalFileSize ?? 0)
+        let semaphore = DispatchSemaphore(value: 0)
+        var data = Data()
+        var status: Int32 = -1
+        DispatchQueue.global(qos: .utility).async {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            status = task.terminationStatus
+            semaphore.signal()
         }
-        return total
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            task.terminate()
+            return nil
+        }
+        guard status == 0,
+              let line = String(data: data, encoding: .utf8)?.split(whereSeparator: \.isNewline).first,
+              let kb = Int64(line.split(separator: "\t", maxSplits: 1).first ?? "") else {
+            return nil
+        }
+        return kb * 1024
     }
 
     private func trashMenuItem() -> NSMenuItem {
