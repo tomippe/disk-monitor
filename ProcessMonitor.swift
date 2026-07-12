@@ -106,7 +106,7 @@ private final class DirectoryMenu: NSMenu {
 }
 
 private struct DirectorySnapshot {
-    let entries: [(url: URL, isDir: Bool, name: String)]
+    let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool)]
     let totalCount: Int
     let error: Error?
 }
@@ -134,14 +134,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menuNameWidth = 20
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
-    private let directoryNameWidth = 28
-    private let directoryCapacityColumnTabStop: CGFloat = 168
     private let directoryItemLimit = 60
     private let directoryFolderSizeTimeout: TimeInterval = 2
     private let directorySizeQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "jp.tomippe.diskmonitor.directory-size"
         queue.maxConcurrentOperationCount = 2
+        queue.qualityOfService = .utility
+        return queue
+    }()
+    private let directoryIconQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "jp.tomippe.diskmonitor.directory-icon"
+        queue.maxConcurrentOperationCount = 4
         queue.qualityOfService = .utility
         return queue
     }()
@@ -812,11 +817,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 includingPropertiesForKeys: keys,
                 options: [.skipsHiddenFiles]
             )
-            let entries: [(url: URL, isDir: Bool, name: String)] = contents.map { url in
+            let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool)] = contents.map { url in
                 let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .localizedNameKey, .nameKey])
                 let isDir = vals?.isDirectory ?? false
                 let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
-                return (url, isDir, name)
+                let accessible = isDirectoryEntryAccessible(at: url, isDirectory: isDir)
+                return (url, isDir, name, accessible)
             }.sorted { a, b in
                 if a.isDir != b.isDir { return a.isDir && !b.isDir }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
@@ -864,22 +870,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let generation = menu.sizeUpdateGeneration
-        var sizedEntries: [(url: URL, isDir: Bool, name: String, item: NSMenuItem)] = []
+        var sizedEntries: [(url: URL, isDir: Bool, nameColumn: String, isAccessible: Bool, item: NSMenuItem)] = []
+        var iconEntries: [(url: URL, item: NSMenuItem)] = []
 
         for entry in snapshot.entries.prefix(directoryItemLimit) {
-            let displayName = directoryDisplayName(entry.name)
-            let item = NSMenuItem(title: displayName, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
+            let nameColumn = directoryNameColumn(entry.name)
+            let item = NSMenuItem(title: nameColumn, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = entry.url
-            item.image = directoryEntryIcon(isDirectory: entry.isDir)
-            item.attributedTitle = directoryEntryAttributedTitle(name: displayName)
-            if entry.isDir {
-                item.submenu = makeDirectoryMenu(for: entry.url)
+            item.image = directoryEntryPlaceholderIcon(isDirectory: entry.isDir)
+            item.attributedTitle = directoryEntryAttributedTitle(nameColumn: nameColumn)
+            if entry.isAccessible {
+                if entry.isDir {
+                    item.submenu = makeDirectoryMenu(for: entry.url)
+                }
+            } else {
+                item.isEnabled = false
+                item.action = nil
             }
             menu.addItem(item)
-            sizedEntries.append((entry.url, entry.isDir, displayName, item))
+            iconEntries.append((entry.url, item))
+            if entry.isAccessible {
+                sizedEntries.append((entry.url, entry.isDir, nameColumn, entry.isAccessible, item))
+            }
         }
 
+        scheduleDirectoryEntryIcons(menu: menu, generation: generation, entries: iconEntries)
         scheduleDirectoryEntrySizes(menu: menu, generation: generation, entries: sizedEntries)
 
         if snapshot.totalCount > directoryItemLimit {
@@ -914,7 +930,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    private func directoryEntryIcon(isDirectory: Bool) -> NSImage {
+    private func directoryEntryPlaceholderIcon(isDirectory: Bool) -> NSImage {
         let symbol = isDirectory ? "folder" : "doc"
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage()
         img.isTemplate = !isDirectory
@@ -922,21 +938,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return img
     }
 
+    private func scheduleDirectoryEntryIcons(
+        menu: DirectoryMenu,
+        generation: Int,
+        entries: [(url: URL, item: NSMenuItem)]
+    ) {
+        for entry in entries {
+            directoryIconQueue.addOperation { [weak self, weak menu, weak item = entry.item] in
+                let icon = NSWorkspace.shared.icon(forFile: entry.url.path)
+                icon.size = NSSize(width: 16, height: 16)
+                DispatchQueue.main.async {
+                    guard let self, let menu, let item,
+                          menu.sizeUpdateGeneration == generation,
+                          item.menu === menu else { return }
+                    item.image = icon
+                    self.scheduleDirectoryMenuVisualUpdate(menu)
+                }
+            }
+        }
+    }
+
     @objc private func openFileFromMenu(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         _ = NSWorkspace.shared.open(url)
     }
 
-    private func directoryDisplayName(_ name: String) -> String {
-        ellipsized(name, maxLength: directoryNameWidth)
+    private static func isDirectoryEntryAccessible(at url: URL, isDirectory: Bool) -> Bool {
+        let fm = FileManager.default
+        if isDirectory {
+            guard fm.isReadableFile(atPath: url.path), fm.isExecutableFile(atPath: url.path) else {
+                return false
+            }
+            return (try? fm.contentsOfDirectory(atPath: url.path)) != nil
+        }
+        return fm.isReadableFile(atPath: url.path)
     }
 
-    private func directoryEntryMenuTitle(name: String, sizeText: String = "") -> String {
-        "\(name)\t\(sizeText)"
+    private func directoryNameColumnMaxWidth() -> CGFloat {
+        capacityColumnTabStop - 12
     }
 
-    private func directoryEntryAttributedTitle(name: String, sizeText: String = "") -> NSAttributedString {
-        let title = directoryEntryMenuTitle(name: name, sizeText: sizeText)
+    private func directoryNameColumn(_ name: String) -> String {
+        let font = NSFont.menuFont(ofSize: 0)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let maxWidth = directoryNameColumnMaxWidth()
+        let ellipsis = "…"
+        var trimmed = name
+        while NSString(string: trimmed).size(withAttributes: attributes).width > maxWidth, trimmed.count > 1 {
+            trimmed = String(trimmed.prefix(trimmed.count - 1))
+        }
+        if trimmed != name {
+            trimmed = String(trimmed.prefix(max(trimmed.count - 1, 1))) + ellipsis
+        }
+        return trimmed
+    }
+
+    private func directoryEntryMenuTitle(nameColumn: String, sizeText: String = "") -> String {
+        "\(nameColumn)\t\(sizeText)\t"
+    }
+
+    private func directoryEntryAttributedTitle(nameColumn: String, sizeText: String = "") -> NSAttributedString {
+        let title = directoryEntryMenuTitle(nameColumn: nameColumn, sizeText: sizeText)
         let baseFont = NSFont.menuFont(ofSize: 0)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,
@@ -945,7 +1007,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let attributed = NSMutableAttributedString(string: title, attributes: attrs)
         guard !sizeText.isEmpty else { return attributed }
 
-        let valueStart = name.count + 1
+        let valueStart = nameColumn.count + 1
         let valueRange = NSRange(location: valueStart, length: sizeText.count)
         let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
         attributed.addAttribute(.font, value: italic, range: valueRange)
@@ -955,9 +1017,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func directoryMenuParagraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.tabStops = [
-            NSTextTab(textAlignment: .right, location: directoryCapacityColumnTabStop, options: [:])
+            NSTextTab(textAlignment: .right, location: capacityColumnTabStop, options: [:])
         ]
-        style.defaultTabInterval = directoryCapacityColumnTabStop
+        style.defaultTabInterval = capacityColumnTabStop
         return style
     }
 
@@ -973,7 +1035,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func scheduleDirectoryEntrySizes(
         menu: DirectoryMenu,
         generation: Int,
-        entries: [(url: URL, isDir: Bool, name: String, item: NSMenuItem)]
+        entries: [(url: URL, isDir: Bool, nameColumn: String, isAccessible: Bool, item: NSMenuItem)]
     ) {
         for entry in entries {
             directorySizeQueue.addOperation { [weak self, weak menu, weak item = entry.item] in
@@ -982,7 +1044,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let sizeText = bytes.map { self.formatBytes($0, concise: false) } ?? ""
                 DispatchQueue.main.async {
                     guard menu.sizeUpdateGeneration == generation, item.menu === menu else { return }
-                    item.attributedTitle = self.directoryEntryAttributedTitle(name: entry.name, sizeText: sizeText)
+                    item.attributedTitle = self.directoryEntryAttributedTitle(nameColumn: entry.nameColumn, sizeText: sizeText)
                     self.scheduleDirectoryMenuVisualUpdate(menu)
                 }
             }
