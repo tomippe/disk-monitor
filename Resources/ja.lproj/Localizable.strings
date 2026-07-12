@@ -18,6 +18,7 @@
 "menu.empty_trash" = "ゴミ箱を空にする";
 "menu.open_disk_utility" = "ディスクユーティリティを起動";
 "menu.directory_loading" = "…";
+"menu.directory_size_calculating" = "サイズ計算中...";
 "menu.directory_empty" = "（空）";
 "menu.directory_read_error" = "（読み込めません: %@）";
 "menu.directory_more" = "…他 %d 件（Finderで開く）";
