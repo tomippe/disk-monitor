@@ -266,17 +266,19 @@ private final class DirectoryMenu: NSMenu {
     var directoryURL: URL?
     /// ボリューム直下のサブメニューのみ設定。取り出し項目を先頭に出す。
     var volumeRow: VolumeRow?
-    var dwellTimer: Timer?
+    var dwellWorkItem: DispatchWorkItem?
+    var loadGeneration = 0
     var loaded = false
     var sizeUpdateGeneration = 0
     var pendingUpdateWorkItem: DispatchWorkItem?
     var folderSizeMenuItem: NSMenuItem?
     var folderItemCount = 0
+    var includeHiddenFiles = false
     var favoriteMode: DirectoryFavoriteMode = .browse
 }
 
 private struct DirectorySnapshot {
-    let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool)]
+    let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool, isHidden: Bool)]
     let totalCount: Int
     let error: Error?
 }
@@ -354,6 +356,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let capacityColumnTabStop: CGFloat = 235
     private let ejectColumnTabStop: CGFloat = 275
     private let directoryFolderSizeTimeout: TimeInterval = 2
+    private let directoryListingTimeout: TimeInterval = 8
     private let directorySizeQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "jp.tomippe.diskmonitor.directory-size"
@@ -457,11 +460,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         if let dirMenu = menu as? DirectoryMenu {
-            dirMenu.dwellTimer?.invalidate()
-            dirMenu.dwellTimer = nil
+            dirMenu.loadGeneration &+= 1
+            dirMenu.dwellWorkItem?.cancel()
+            dirMenu.dwellWorkItem = nil
             dirMenu.pendingUpdateWorkItem?.cancel()
             dirMenu.pendingUpdateWorkItem = nil
             dirMenu.sizeUpdateGeneration &+= 1
+            dirMenu.loaded = false
             return
         }
         isMenuVisible = false
@@ -1116,63 +1121,87 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
+    private static func optionKeyPressed() -> Bool {
+        NSEvent.modifierFlags.contains(.option)
+    }
+
     private func scheduleDirectoryDwellLoad(_ menu: DirectoryMenu) {
-        menu.dwellTimer?.invalidate()
+        menu.dwellWorkItem?.cancel()
         guard !menu.loaded else { return }
 
-        let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self, weak menu] _ in
-            guard let self, let menu, let dir = menu.directoryURL else { return }
-            menu.dwellTimer = nil
-            menu.loaded = true
+        let generation = menu.loadGeneration
+        let work = DispatchWorkItem { [weak self, weak menu] in
+            guard let self, let menu, menu.loadGeneration == generation, let dir = menu.directoryURL else { return }
+            let includeHidden = Self.optionKeyPressed()
+            menu.includeHiddenFiles = includeHidden
             let volumeRow = menu.volumeRow
             DispatchQueue.global(qos: .utility).async {
-                let snapshot = Self.readDirectorySnapshot(at: dir)
+                let snapshot = Self.readDirectorySnapshot(
+                    at: dir,
+                    timeout: self.directoryListingTimeout,
+                    includeHiddenFiles: includeHidden
+                )
                 DispatchQueue.main.async { [weak self, weak menu] in
-                    guard let self, let menu, menu.directoryURL == dir else { return }
+                    guard let self, let menu,
+                          menu.loadGeneration == generation,
+                          menu.directoryURL == dir else { return }
                     self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                    menu.loaded = true
                     menu.update()
                 }
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        menu.dwellTimer = timer
+        menu.dwellWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    private static func readDirectorySnapshot(at dir: URL) -> DirectorySnapshot {
+    private static func readDirectorySnapshot(
+        at dir: URL,
+        timeout: TimeInterval,
+        includeHiddenFiles: Bool = false
+    ) -> DirectorySnapshot {
         let started = CFAbsoluteTimeGetCurrent()
-        let keys: [URLResourceKey] = [.isDirectoryKey, .localizedNameKey, .nameKey]
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
+        let keySet: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey, .localizedNameKey, .nameKey]
+        let keyList = Array(keySet)
+        let listingOptions: FileManager.DirectoryEnumerationOptions = includeHiddenFiles ? [] : [.skipsHiddenFiles]
+        guard let contents = withTimeout(timeout, {
+            try? FileManager.default.contentsOfDirectory(
                 at: dir,
-                includingPropertiesForKeys: keys,
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: keyList,
+                options: listingOptions
             )
-            let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool)] = contents.map { url in
-                let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .localizedNameKey, .nameKey])
-                let isDir = vals?.isDirectory ?? false
-                let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
-                let accessible = isDirectoryEntryAccessible(at: url, isDirectory: isDir)
-                return (url, isDir, name, accessible)
-            }.sorted { a, b in
-                if a.isDir != b.isDir { return a.isDir && !b.isDir }
-                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-            }
+        }).flatMap({ $0 }) else {
             DiskMonitorLog.slowIfNeeded(
-                "readDirectorySnapshot",
+                "readDirectorySnapshot timeout",
                 started: started,
-                thresholdMs: 100,
-                extra: "\(dir.path) entries=\(entries.count)"
-            )
-            return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
-        } catch {
-            DiskMonitorLog.slowIfNeeded(
-                "readDirectorySnapshot error",
-                started: started,
-                thresholdMs: 50,
+                thresholdMs: 0,
                 extra: dir.path
             )
-            return DirectorySnapshot(entries: [], totalCount: 0, error: error)
+            let message = NSLocalizedString("menu.directory_list_timeout", comment: "")
+            return DirectorySnapshot(
+                entries: [],
+                totalCount: 0,
+                error: NSError(domain: "DiskMonitor", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            )
         }
+        let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool, isHidden: Bool)] = contents.map { url in
+            let vals = try? url.resourceValues(forKeys: keySet)
+            let isDir = vals?.isDirectory ?? false
+            let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
+            let accessible = isDirectoryEntryAccessible(at: url, isDirectory: isDir)
+            let isHidden = vals?.isHidden == true || name.hasPrefix(".")
+            return (url, isDir, name, accessible, isHidden)
+        }.sorted { a, b in
+            if a.isDir != b.isDir { return a.isDir && !b.isDir }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+        DiskMonitorLog.slowIfNeeded(
+            "readDirectorySnapshot",
+            started: started,
+            thresholdMs: 100,
+            extra: "\(dir.path) entries=\(entries.count) hidden=\(includeHiddenFiles)"
+        )
+        return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
     }
 
     private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
@@ -1186,7 +1215,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let itemCount = snapshot.error == nil ? snapshot.totalCount : 0
         menu.folderItemCount = itemCount
         let summaryItem = NSMenuItem(
-            title: directoryFolderSummaryTitle(itemCount: itemCount),
+            title: directoryFolderSummaryTitle(itemCount: itemCount, includesHidden: menu.includeHiddenFiles),
             action: #selector(openFileFromMenu(_:)),
             keyEquivalent: ""
         )
@@ -1231,6 +1260,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.target = self
             item.representedObject = entry.url
             item.image = directoryEntryPlaceholderIcon(isDirectory: entry.isDir)
+            if entry.isHidden {
+                item.attributedTitle = hiddenDirectoryEntryAttributedTitle(entry.name)
+            }
             if entry.isAccessible {
                 if entry.isDir, Self.isBrowsableDirectory(at: entry.url) {
                     item.submenu = makeDirectoryMenu(for: entry.url)
@@ -1326,7 +1358,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let dir = menu.directoryURL else { return }
         FavoriteStore.add(url)
         guard menu.loaded else { return }
-        let snapshot = Self.readDirectorySnapshot(at: dir)
+        let snapshot = Self.readDirectorySnapshot(
+            at: dir,
+            timeout: directoryListingTimeout,
+            includeHiddenFiles: menu.includeHiddenFiles
+        )
         applyDirectorySnapshot(snapshot, to: menu, volumeRow: menu.volumeRow)
         menu.update()
     }
@@ -1378,6 +1414,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return NSWorkspace.shared.urlForApplication(toOpen: url)
     }
 
+    private static let openSmartBundleID = "jp.tomippe.opensmart"
+
+    private static var openSmartApplicationURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: openSmartBundleID)
+    }
+
+    private static var isOpenSmartInstalled: Bool {
+        openSmartApplicationURL != nil
+    }
+
+    private func openURL(_ url: URL, preferOpenSmart: Bool) {
+        if preferOpenSmart, !Self.isApplicationBundle(at: url), let appURL = Self.openSmartApplicationURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config, completionHandler: nil)
+            return
+        }
+        openWithDefaultFileManager(url)
+    }
+
     private func openWithDefaultFileManager(_ url: URL) {
         if Self.isApplicationBundle(at: url) {
             _ = NSWorkspace.shared.open(url)
@@ -1394,7 +1450,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openFileFromMenu(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
-        openWithDefaultFileManager(url)
+        let useOpenSmart = Self.isOpenSmartInstalled && Self.optionKeyPressed()
+        openURL(url, preferOpenSmart: useOpenSmart)
     }
 
     private static func isBrowsableDirectory(at url: URL) -> Bool {
@@ -1413,17 +1470,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return fm.isReadableFile(atPath: url.path)
     }
 
-    private func directoryFolderSummaryTitle(itemCount: Int, sizeText: String? = nil) -> String {
+    private func directoryFolderSummaryTitle(itemCount: Int, sizeText: String? = nil, includesHidden: Bool = false) -> String {
+        let hiddenSuffix = includesHidden
+            ? NSLocalizedString("menu.directory_summary_includes_hidden", comment: "")
+            : ""
         if let sizeText {
-            return String(format: NSLocalizedString("menu.directory_summary_items_size", comment: ""), itemCount, sizeText)
+            return String(
+                format: NSLocalizedString("menu.directory_summary_items_size", comment: ""),
+                itemCount,
+                sizeText
+            ) + hiddenSuffix
         }
-        return String(format: NSLocalizedString("menu.directory_summary_items", comment: ""), itemCount)
+        return String(format: NSLocalizedString("menu.directory_summary_items", comment: ""), itemCount) + hiddenSuffix
     }
 
-    private func directoryFolderSummaryAttributedTitle(itemCount: Int, sizeText: String) -> NSAttributedString {
+    private func hiddenDirectoryEntryAttributedTitle(_ name: String) -> NSAttributedString {
+        NSAttributedString(
+            string: name,
+            attributes: [.foregroundColor: NSColor.secondaryLabelColor]
+        )
+    }
+
+    private func directoryFolderSummaryAttributedTitle(
+        itemCount: Int,
+        sizeText: String,
+        includesHidden: Bool = false
+    ) -> NSAttributedString {
         let prefix = String(format: NSLocalizedString("menu.directory_summary_items", comment: ""), itemCount)
         let separator = NSLocalizedString("menu.directory_summary_separator", comment: "")
-        let full = "\(prefix)\(separator)\(sizeText)"
+        let hiddenSuffix = includesHidden
+            ? NSLocalizedString("menu.directory_summary_includes_hidden", comment: "")
+            : ""
+        let full = "\(prefix)\(separator)\(sizeText)\(hiddenSuffix)"
         let baseFont = NSFont.menuFont(ofSize: 0)
         let attributed = NSMutableAttributedString(string: full, attributes: [.font: baseFont])
         let sizeStart = prefix.count + separator.count
@@ -1456,10 +1534,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       summaryItem.menu === menu else { return }
                 if let bytes {
                     let sizeText = self.formatBytes(bytes, concise: false)
-                    summaryItem.title = self.directoryFolderSummaryTitle(itemCount: itemCount, sizeText: sizeText)
-                    summaryItem.attributedTitle = self.directoryFolderSummaryAttributedTitle(itemCount: itemCount, sizeText: sizeText)
+                    summaryItem.title = self.directoryFolderSummaryTitle(
+                        itemCount: itemCount,
+                        sizeText: sizeText,
+                        includesHidden: menu.includeHiddenFiles
+                    )
+                    summaryItem.attributedTitle = self.directoryFolderSummaryAttributedTitle(
+                        itemCount: itemCount,
+                        sizeText: sizeText,
+                        includesHidden: menu.includeHiddenFiles
+                    )
                 } else {
-                    summaryItem.title = self.directoryFolderSummaryTitle(itemCount: itemCount)
+                    summaryItem.title = self.directoryFolderSummaryTitle(
+                        itemCount: itemCount,
+                        includesHidden: menu.includeHiddenFiles
+                    )
                     summaryItem.attributedTitle = nil
                 }
                 self.scheduleDirectoryMenuVisualUpdate(menu)
@@ -1583,22 +1672,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         try? task.run()
     }
 
-    private func openInFinder(_ row: VolumeRow) {
-        openWithDefaultFileManager(row.url)
-    }
-
     @objc private func openVolumeFromMenu(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? VolumeRow else { return }
-        openInFinder(row)
-    }
-
-    private func openTrash() {
-        let trashURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash", isDirectory: true)
-        openWithDefaultFileManager(trashURL)
+        let useOpenSmart = Self.isOpenSmartInstalled && Self.optionKeyPressed()
+        openURL(row.url, preferOpenSmart: useOpenSmart)
     }
 
     @objc private func openTrashFromMenu() {
-        openTrash()
+        let trashURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash", isDirectory: true)
+        let useOpenSmart = Self.isOpenSmartInstalled && Self.optionKeyPressed()
+        openURL(trashURL, preferOpenSmart: useOpenSmart)
     }
 
     @objc private func detachVolumeFromMenu(_ sender: NSMenuItem) {

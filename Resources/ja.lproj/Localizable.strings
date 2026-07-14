@@ -18,7 +18,9 @@
 "menu.empty_trash" = "ゴミ箱を空にする";
 "menu.open_disk_utility" = "ディスクユーティリティを起動";
 "menu.directory_loading" = "…";
+"menu.directory_list_timeout" = "フォルダ一覧の取得がタイムアウトしました";
 "menu.directory_summary_items" = "%d 項目";
+"menu.directory_summary_includes_hidden" = "（隠しファイルを含む）";
 "menu.directory_summary_items_size" = "%d 項目 - %@";
 "menu.directory_summary_separator" = " - ";
 "menu.add_to_favorites" = "お気に入りに追加";

@@ -18,7 +18,9 @@
 "menu.empty_trash" = "Empty Trash";
 "menu.open_disk_utility" = "Open Disk Utility";
 "menu.directory_loading" = "…";
+"menu.directory_list_timeout" = "Timed out while listing the folder.";
 "menu.directory_summary_items" = "%d items";
+"menu.directory_summary_includes_hidden" = " (including hidden items)";
 "menu.directory_summary_items_size" = "%d items - %@";
 "menu.directory_summary_separator" = " - ";
 "menu.add_to_favorites" = "Add to Favorites";

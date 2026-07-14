@@ -18,7 +18,9 @@
 "menu.empty_trash" = "清空废纸篓";
 "menu.open_disk_utility" = "打开磁盘工具";
 "menu.directory_loading" = "…";
+"menu.directory_list_timeout" = "读取文件夹列表超时";
 "menu.directory_summary_items" = "%d 项";
+"menu.directory_summary_includes_hidden" = "（含隐藏项目）";
 "menu.directory_summary_items_size" = "%d 项 - %@";
 "menu.directory_summary_separator" = " - ";
 "menu.add_to_favorites" = "添加到个人收藏";
