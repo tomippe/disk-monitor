@@ -18,6 +18,8 @@
 "menu.empty_trash" = "ゴミ箱を空にする";
 "menu.open_disk_utility" = "ディスクユーティリティを起動";
 "menu.directory_loading" = "…";
+"menu.directory_load_stuck" = "フォルダ一覧を読み込めませんでした";
+"menu.directory_reload" = "再読み込み";
 "menu.directory_list_timeout" = "フォルダ一覧の取得がタイムアウトしました";
 "menu.directory_summary_items" = "%d 項目";
 "menu.directory_summary_includes_hidden" = "（隠しファイルを含む）";

@@ -18,6 +18,8 @@
 "menu.empty_trash" = "Empty Trash";
 "menu.open_disk_utility" = "Open Disk Utility";
 "menu.directory_loading" = "…";
+"menu.directory_load_stuck" = "Couldn’t load the folder listing.";
+"menu.directory_reload" = "Reload";
 "menu.directory_list_timeout" = "Timed out while listing the folder.";
 "menu.directory_summary_items" = "%d items";
 "menu.directory_summary_includes_hidden" = " (including hidden items)";

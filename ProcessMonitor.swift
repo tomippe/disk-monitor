@@ -267,7 +267,9 @@ private final class DirectoryMenu: NSMenu {
     /// ボリューム直下のサブメニューのみ設定。取り出し項目を先頭に出す。
     var volumeRow: VolumeRow?
     var dwellWorkItem: DispatchWorkItem?
+    var loadWatchdogWorkItem: DispatchWorkItem?
     var loadGeneration = 0
+    var loadAttempt = 0
     var loaded = false
     var sizeUpdateGeneration = 0
     var pendingUpdateWorkItem: DispatchWorkItem?
@@ -357,6 +359,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let ejectColumnTabStop: CGFloat = 275
     private let directoryFolderSizeTimeout: TimeInterval = 2
     private let directoryListingTimeout: TimeInterval = 8
+    private let directoryLoadDwell: TimeInterval = 0.5
+    private let directoryLoadWatchdogGrace: TimeInterval = 2
+    private let directoryLoadMaxAttempts = 2
+    private static let blockingWorkQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.blocking-work", qos: .utility)
+    private let directoryListingQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "jp.tomippe.diskmonitor.directory-listing"
+        queue.maxConcurrentOperationCount = 2
+        queue.qualityOfService = .utility
+        return queue
+    }()
     private let directorySizeQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "jp.tomippe.diskmonitor.directory-size"
@@ -463,10 +476,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             dirMenu.loadGeneration &+= 1
             dirMenu.dwellWorkItem?.cancel()
             dirMenu.dwellWorkItem = nil
+            dirMenu.loadWatchdogWorkItem?.cancel()
+            dirMenu.loadWatchdogWorkItem = nil
             dirMenu.pendingUpdateWorkItem?.cancel()
             dirMenu.pendingUpdateWorkItem = nil
             dirMenu.sizeUpdateGeneration &+= 1
             dirMenu.loaded = false
+            dirMenu.loadAttempt = 0
             return
         }
         isMenuVisible = false
@@ -821,7 +837,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static func withTimeout<T>(_ timeout: TimeInterval, _ work: @escaping () -> T) -> T? {
         let semaphore = DispatchSemaphore(value: 0)
         var result: T?
-        DispatchQueue.global(qos: .utility).async {
+        blockingWorkQueue.async {
             result = work()
             semaphore.signal()
         }
@@ -849,7 +865,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ) -> URLResourceValues? {
         let semaphore = DispatchSemaphore(value: 0)
         var result: URLResourceValues?
-        DispatchQueue.global(qos: .utility).async {
+        blockingWorkQueue.async {
             result = try? url.resourceValues(forKeys: keys)
             semaphore.signal()
         }
@@ -1127,32 +1143,119 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func scheduleDirectoryDwellLoad(_ menu: DirectoryMenu) {
         menu.dwellWorkItem?.cancel()
+        menu.loadWatchdogWorkItem?.cancel()
         guard !menu.loaded else { return }
 
         let generation = menu.loadGeneration
         let work = DispatchWorkItem { [weak self, weak menu] in
-            guard let self, let menu, menu.loadGeneration == generation, let dir = menu.directoryURL else { return }
-            let includeHidden = Self.optionKeyPressed()
-            menu.includeHiddenFiles = includeHidden
-            let volumeRow = menu.volumeRow
-            DispatchQueue.global(qos: .utility).async {
-                let snapshot = Self.readDirectorySnapshot(
-                    at: dir,
-                    timeout: self.directoryListingTimeout,
-                    includeHiddenFiles: includeHidden
-                )
-                DispatchQueue.main.async { [weak self, weak menu] in
-                    guard let self, let menu,
-                          menu.loadGeneration == generation,
-                          menu.directoryURL == dir else { return }
-                    self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
-                    menu.loaded = true
-                    menu.update()
-                }
-            }
+            self?.beginDirectoryLoad(menu, generation: generation)
         }
         menu.dwellWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + directoryLoadDwell, execute: work)
+        scheduleDirectoryLoadWatchdog(menu, generation: generation)
+    }
+
+    private func beginDirectoryLoad(_ menu: DirectoryMenu?, generation: Int) {
+        guard let menu, menu.loadGeneration == generation, let dir = menu.directoryURL else { return }
+        let includeHidden = Self.optionKeyPressed()
+        menu.includeHiddenFiles = includeHidden
+        let volumeRow = menu.volumeRow
+        directoryListingQueue.addOperation { [weak self, weak menu] in
+            guard let self, let menu else { return }
+            let snapshot = Self.readDirectorySnapshot(
+                at: dir,
+                timeout: self.directoryListingTimeout,
+                includeHiddenFiles: includeHidden
+            )
+            DispatchQueue.main.async { [weak self, weak menu] in
+                guard let self, let menu,
+                      menu.loadGeneration == generation,
+                      menu.directoryURL == dir else { return }
+                menu.loadWatchdogWorkItem?.cancel()
+                menu.loadWatchdogWorkItem = nil
+                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                menu.loaded = true
+                menu.loadAttempt = 0
+                menu.update()
+            }
+        }
+    }
+
+    private func scheduleDirectoryLoadWatchdog(_ menu: DirectoryMenu, generation: Int) {
+        let delay = directoryLoadDwell + directoryListingTimeout + directoryLoadWatchdogGrace
+        let watchdog = DispatchWorkItem { [weak self, weak menu] in
+            guard let self, let menu,
+                  menu.loadGeneration == generation,
+                  !menu.loaded else { return }
+            DiskMonitorLog.slowIfNeeded(
+                "directoryLoadWatchdog",
+                started: CFAbsoluteTimeGetCurrent(),
+                thresholdMs: 0,
+                extra: "\(menu.directoryURL?.path ?? "?") attempt=\(menu.loadAttempt + 1)"
+            )
+            self.recoverStuckDirectoryMenu(menu)
+        }
+        menu.loadWatchdogWorkItem = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: watchdog)
+    }
+
+    private func recoverStuckDirectoryMenu(_ menu: DirectoryMenu) {
+        menu.loadGeneration &+= 1
+        menu.dwellWorkItem?.cancel()
+        menu.dwellWorkItem = nil
+        menu.loadWatchdogWorkItem?.cancel()
+        menu.loadWatchdogWorkItem = nil
+        menu.pendingUpdateWorkItem?.cancel()
+        menu.pendingUpdateWorkItem = nil
+        menu.sizeUpdateGeneration &+= 1
+        menu.loaded = false
+
+        if menu.loadAttempt < directoryLoadMaxAttempts {
+            menu.loadAttempt += 1
+            showDirectoryWaitingPlaceholder(menu)
+            menu.update()
+            scheduleDirectoryDwellLoad(menu)
+            return
+        }
+        showDirectoryLoadRecovery(menu)
+        menu.update()
+    }
+
+    private func showDirectoryLoadRecovery(_ menu: DirectoryMenu) {
+        menu.removeAllItems()
+        let message = NSMenuItem(
+            title: NSLocalizedString("menu.directory_load_stuck", comment: ""),
+            action: nil,
+            keyEquivalent: ""
+        )
+        message.isEnabled = false
+        menu.addItem(message)
+        menu.addItem(.separator())
+        let retry = NSMenuItem(
+            title: NSLocalizedString("menu.directory_reload", comment: ""),
+            action: #selector(reloadDirectoryMenu(_:)),
+            keyEquivalent: ""
+        )
+        retry.target = self
+        retry.representedObject = menu
+        menu.addItem(retry)
+    }
+
+    @objc private func reloadDirectoryMenu(_ sender: NSMenuItem) {
+        guard let menu = sender.representedObject as? DirectoryMenu else { return }
+        menu.loadGeneration &+= 1
+        menu.dwellWorkItem?.cancel()
+        menu.dwellWorkItem = nil
+        menu.loadWatchdogWorkItem?.cancel()
+        menu.loadWatchdogWorkItem = nil
+        menu.pendingUpdateWorkItem?.cancel()
+        menu.pendingUpdateWorkItem = nil
+        menu.sizeUpdateGeneration &+= 1
+        menu.loaded = false
+        menu.loadAttempt = 0
+        showDirectoryWaitingPlaceholder(menu)
+        menu.update()
+        scheduleDirectoryDwellLoad(menu)
     }
 
     private static func readDirectorySnapshot(
@@ -1358,13 +1461,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let dir = menu.directoryURL else { return }
         FavoriteStore.add(url)
         guard menu.loaded else { return }
-        let snapshot = Self.readDirectorySnapshot(
-            at: dir,
-            timeout: directoryListingTimeout,
-            includeHiddenFiles: menu.includeHiddenFiles
-        )
-        applyDirectorySnapshot(snapshot, to: menu, volumeRow: menu.volumeRow)
-        menu.update()
+        menu.sizeUpdateGeneration &+= 1
+        let generation = menu.sizeUpdateGeneration
+        let volumeRow = menu.volumeRow
+        let includeHidden = menu.includeHiddenFiles
+        directoryListingQueue.addOperation { [weak self, weak menu] in
+            guard let self, let menu else { return }
+            let snapshot = Self.readDirectorySnapshot(
+                at: dir,
+                timeout: self.directoryListingTimeout,
+                includeHiddenFiles: includeHidden
+            )
+            DispatchQueue.main.async {
+                guard menu.sizeUpdateGeneration == generation else { return }
+                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                menu.update()
+            }
+        }
     }
 
     @objc private func removeFromFavorites(_ sender: NSMenuItem) {
