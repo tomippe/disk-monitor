@@ -768,26 +768,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static func readRootStatusSnapshot() -> RootStatusSnapshot? {
         let root = URL(fileURLWithPath: "/")
-        // ルート容量は attributesOfFileSystem を優先（ネットワーク列挙キューと独立・高速）。
-        let available: Int64?
-        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: root.path),
-           let free = attrs[.systemFreeSize] as? NSNumber {
-            available = free.int64Value
-        } else {
-            available = freeBytes(for: root)
-        }
-        guard let available else { return nil }
-
+        // Finder / メニュー一覧と同じ importantUsage を使う（systemFreeSize と混ぜると数 GB ちらつく）。
+        // rootStatusQueue 上で直接取得し、ネットワーク列挙キューには載せない。
         let keys: Set<URLResourceKey> = [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
             .volumeLocalizedNameKey,
             .volumeNameKey,
             .effectiveIconKey,
         ]
         let values = try? root.resourceValues(forKeys: keys)
+        let available = values?.volumeAvailableCapacityForImportantUsage.flatMap { $0 > 0 ? $0 : nil }
+            ?? values?.volumeAvailableCapacity.map(Int64.init)
+            ?? freeBytes(for: root)
+        guard let available else { return nil }
         let name = values?.volumeLocalizedName ?? values?.volumeName ?? "Macintosh HD"
         let icon = values?.effectiveIcon as? NSImage
             ?? NSWorkspace.shared.icon(forFile: root.path)
-        return RootStatusSnapshot(availableBytes: available, name: name, icon: icon)
+        return RootStatusSnapshot(availableBytes: Int64(available), name: name, icon: icon)
     }
 
     private static func volumeIcon(for path: String, effectiveIcon: NSImage?) -> NSImage {
