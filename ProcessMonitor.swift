@@ -362,7 +362,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let directoryLoadDwell: TimeInterval = 0.5
     private let directoryLoadWatchdogGrace: TimeInterval = 2
     private let directoryLoadMaxAttempts = 2
-    private static let blockingWorkQueue = DispatchQueue(label: "jp.tomippe.diskmonitor.blocking-work", qos: .utility)
+    /// タイムアウト後も I/O が残り得るため **concurrent** 必須。serial だとハングした
+    /// ネットワークボリューム取得が後続のルート容量・ローカル取得を永久に塞ぐ。
+    private static let blockingWorkQueue = DispatchQueue(
+        label: "jp.tomippe.diskmonitor.blocking-work",
+        qos: .utility,
+        attributes: .concurrent
+    )
+    /// メニューバー表示専用（ネットワーク列挙と競合させない）
+    private static let rootStatusQueue = DispatchQueue(
+        label: "jp.tomippe.diskmonitor.root-status",
+        qos: .userInitiated
+    )
     private let directoryListingQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "jp.tomippe.diskmonitor.directory-listing"
@@ -559,7 +570,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// メニューバー表示専用。全ボリューム取得と独立し、inFlight でも常に走る。
     private func refreshRootStatusQuick() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        Self.rootStatusQueue.async { [weak self] in
             guard let snapshot = Self.readRootStatusSnapshot() else { return }
             DispatchQueue.main.async {
                 self?.applyRootStatusSnapshot(snapshot)
@@ -623,15 +634,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        // メインスレッドで withTimeout / mountedVolumeURLs を待たない（UI・Sparkle・再起動が固まる）。
+        // 取得タイムアウトで欠けたボリュームは、前回分のうちローカル系だけ暫定保持する。
         var merged = rows
         let newURLs = Set(rows.map(\.url))
-        if let mountedList = Self.withTimeout(3.0, {
-            FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes])
-        }).flatMap({ $0 }) {
-            let mountedSet = Set(mountedList)
-            for old in volumeRows where !newURLs.contains(old.url) && mountedSet.contains(old.url) {
-                merged.append(old)
-            }
+        for old in volumeRows where !newURLs.contains(old.url) && old.kind != .network {
+            merged.append(old)
         }
         merged = Self.sortVolumeRows(merged)
 
@@ -760,21 +768,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static func readRootStatusSnapshot() -> RootStatusSnapshot? {
         let root = URL(fileURLWithPath: "/")
+        // ルート容量は attributesOfFileSystem を優先（ネットワーク列挙キューと独立・高速）。
+        let available: Int64?
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: root.path),
+           let free = attrs[.systemFreeSize] as? NSNumber {
+            available = free.int64Value
+        } else {
+            available = freeBytes(for: root)
+        }
+        guard let available else { return nil }
+
         let keys: Set<URLResourceKey> = [
-            .volumeAvailableCapacityForImportantUsageKey,
-            .volumeAvailableCapacityKey,
             .volumeLocalizedNameKey,
             .volumeNameKey,
             .effectiveIconKey,
         ]
-        guard let values = resourceValues(for: root, keys: keys, timeout: 3.0) else { return nil }
-        let available = values.volumeAvailableCapacityForImportantUsage.flatMap { $0 > 0 ? $0 : nil }
-            ?? values.volumeAvailableCapacity.map(Int64.init)
-            ?? freeBytes(for: root)
-        guard let available else { return nil }
-        let name = values.volumeLocalizedName ?? values.volumeName ?? root.lastPathComponent
-        let icon = volumeIcon(for: root.path, effectiveIcon: values.effectiveIcon as? NSImage)
-        return RootStatusSnapshot(availableBytes: Int64(available), name: name, icon: icon)
+        let values = try? root.resourceValues(forKeys: keys)
+        let name = values?.volumeLocalizedName ?? values?.volumeName ?? "Macintosh HD"
+        let icon = values?.effectiveIcon as? NSImage
+            ?? NSWorkspace.shared.icon(forFile: root.path)
+        return RootStatusSnapshot(availableBytes: available, name: name, icon: icon)
     }
 
     private static func volumeIcon(for path: String, effectiveIcon: NSImage?) -> NSImage {
