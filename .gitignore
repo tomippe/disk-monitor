@@ -1,14 +1,24 @@
 build/
+mac/build/
+windows/publish/
+windows/**/bin/
+windows/**/obj/
 *.provisionprofile
 .DS_Store
 .env
 
-# ルートに置いた手動ビルドの .app（正規の成果物は build/ のみ）
+# ルートに置いた手動ビルドの .app（正規の成果物は mac/build/ のみ）
 /ProcessMonitor.app/
 /Disk Monitor.app/
+/mac/ProcessMonitor.app/
+/mac/Disk Monitor.app/
 
-# Sparkle（バイナリ・フレームワークはgit管理しない）
+# Sparkle（バイナリ・フレームワークは git 管理しない）
 Sparkle.framework/
 Sparkle_bin/
+mac/Sparkle.framework/
+mac/Sparkle_bin/
 .derived_data/
+mac/.derived_data/
 AppIcon.icns
+mac/AppIcon.icns

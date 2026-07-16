@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="app.name" xml:space="preserve"><value>Disk Monitor</value></data>
+  <data name="status.loading" xml:space="preserve"><value>…</value></data>
+  <data name="status.unavailable" xml:space="preserve"><value>不可用</value></data>
+  <data name="status.tooltip" xml:space="preserve"><value>{0} 可用空间：{1}</value></data>
+  <data name="menu.more" xml:space="preserve"><value>其他</value></data>
+  <data name="menu.copy_status" xml:space="preserve"><value>复制状态</value></data>
+  <data name="menu.refresh" xml:space="preserve"><value>立即刷新</value></data>
+  <data name="menu.login_item" xml:space="preserve"><value>登录时打开</value></data>
+  <data name="menu.restart_format" xml:space="preserve"><value>重新启动 {0}</value></data>
+  <data name="menu.quit_format" xml:space="preserve"><value>退出 {0}</value></data>
+  <data name="menu.no_volumes" xml:space="preserve"><value>没有卷数据</value></data>
+  <data name="menu.trash" xml:space="preserve"><value>回收站</value></data>
+  <data name="menu.empty_trash" xml:space="preserve"><value>清空回收站</value></data>
+  <data name="menu.open_disk_utility" xml:space="preserve"><value>打开磁盘管理</value></data>
+  <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
+  <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} 项</value></data>
+  <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} 项 - {1}</value></data>
+  <data name="menu.directory_empty" xml:space="preserve"><value>（空）</value></data>
+  <data name="menu.directory_read_error" xml:space="preserve"><value>（无法读取：{0}）</value></data>
+  <data name="menu.add_to_favorites" xml:space="preserve"><value>添加到个人收藏</value></data>
+  <data name="menu.remove_from_favorites" xml:space="preserve"><value>从个人收藏中移除</value></data>
+  <data name="menu.eject" xml:space="preserve"><value>弹出</value></data>
+  <data name="menu.about" xml:space="preserve"><value>关于 Disk Monitor</value></data>
+  <data name="menu.send_feedback" xml:space="preserve"><value>发送反馈...</value></data>
+  <data name="menu.check_for_updates" xml:space="preserve"><value>检查更新...</value></data>
+  <data name="about.format" xml:space="preserve"><value>版本 {0}</value></data>
+</root>

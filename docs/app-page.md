@@ -23,10 +23,11 @@
 
 ## プラットフォーム
 
-- **platform**: ["mac"]
+- **platform**: ["mac"]（Windows 版は `windows/` 開発中。公開時に `win` を追加）
 - **app-macdesc**: macOS 11+, ZIP<br>日本語,English,中文
 
 MAS 公開後は **app-iosurl**（Mac App Store の URL）と **app-macdesc**（`macOS 11+, App Store<br>日本語,English,中文` 形式）を更新すること。
+Windows 公開時は **app-winurl** / **app-windesc** を設定すること。
 
 ## メディア（WordPress）
 

@@ -1,5 +1,6 @@
 import Cocoa
 import CoreServices
+import Darwin
 import os
 import ServiceManagement
 import Sparkle
@@ -458,6 +459,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func workspaceVolumeChanged(_: Notification) {
+        Self.clearDiskInfoCache()
         scheduleRefreshAfterFileSystemChange()
     }
 
@@ -858,6 +860,95 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return result
     }
 
+    /// Process をタイムアウト付きで実行する。
+    /// 旧実装は `readDataToEndOfFile` を先に待つため、timeout→terminate 後もパイプ EOF 待ちで
+    /// ユーティリティスレッドが永久に残り、数時間後に GCD / ディレクトリ一覧が枯渇していた。
+    @discardableResult
+    private static func runProcess(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) -> (status: Int32, stdout: Data)? {
+        let started = CFAbsoluteTimeGetCurrent()
+        let task = Process()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = arguments
+        task.standardOutput = outPipe
+        task.standardError = errPipe
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        let outputLock = NSLock()
+        var stdoutData = Data()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            outputLock.lock()
+            stdoutData.append(chunk)
+            outputLock.unlock()
+        }
+        // stderr を捨てつつパイプ詰まらせない
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+            }
+        }
+
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            task.waitUntilExit()
+            done.signal()
+        }
+
+        if done.wait(timeout: .now() + timeout) == .timedOut {
+            forceTerminateProcess(task)
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            try? outPipe.fileHandleForReading.close()
+            try? errPipe.fileHandleForReading.close()
+            _ = done.wait(timeout: .now() + 1.0)
+            DiskMonitorLog.slowIfNeeded(
+                "runProcess timeout",
+                started: started,
+                thresholdMs: 0,
+                extra: "\(executable) \(arguments.joined(separator: " "))"
+            )
+            return nil
+        }
+
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+        let remaining = outPipe.fileHandleForReading.readDataToEndOfFile()
+        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+        outputLock.lock()
+        stdoutData.append(remaining)
+        let data = stdoutData
+        outputLock.unlock()
+        return (task.terminationStatus, data)
+    }
+
+    private static func forceTerminateProcess(_ task: Process) {
+        guard task.isRunning else { return }
+        task.terminate()
+        let deadline = Date().addingTimeInterval(0.2)
+        while task.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if task.isRunning {
+            kill(task.processIdentifier, SIGKILL)
+        }
+    }
+
     private static func isNonFreeMetric(values: URLResourceValues, info: [String: Any]) -> Bool {
         let bus = (info["BusProtocol"] as? String)?.lowercased() ?? ""
         if bus.contains("disk image") || bus.contains("image") {
@@ -886,38 +977,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return result
     }
 
+    private static let diskInfoCacheLock = NSLock()
+    private static var diskInfoCache: [String: (info: [String: Any], cachedAt: Date, positive: Bool)] = [:]
+    private static let diskInfoPositiveTTL: TimeInterval = 600
+    private static let diskInfoNegativeTTL: TimeInterval = 60
+
+    private static func clearDiskInfoCache() {
+        diskInfoCacheLock.lock()
+        diskInfoCache.removeAll()
+        diskInfoCacheLock.unlock()
+    }
+
     private static func diskInfo(for mountPath: String, timeout: TimeInterval = 2) -> [String: Any] {
-        let task = Process()
-        let pipe = Pipe()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-        task.arguments = ["info", "-plist", mountPath]
-        task.standardOutput = pipe
-        task.standardError = Pipe()
+        diskInfoCacheLock.lock()
+        if let cached = diskInfoCache[mountPath] {
+            let ttl = cached.positive ? diskInfoPositiveTTL : diskInfoNegativeTTL
+            if Date().timeIntervalSince(cached.cachedAt) < ttl {
+                let info = cached.info
+                diskInfoCacheLock.unlock()
+                return info
+            }
+        }
+        diskInfoCacheLock.unlock()
 
-        do {
-            try task.run()
-        } catch {
+        guard let result = runProcess(
+            executable: "/usr/sbin/diskutil",
+            arguments: ["info", "-plist", mountPath],
+            timeout: timeout
+        ), result.status == 0 else {
+            diskInfoCacheLock.lock()
+            diskInfoCache[mountPath] = ([:], Date(), false)
+            diskInfoCacheLock.unlock()
             return [:]
         }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var data = Data()
-        var status: Int32 = -1
-        DispatchQueue.global(qos: .utility).async {
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            status = task.terminationStatus
-            semaphore.signal()
-        }
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            task.terminate()
-            return [:]
-        }
-        guard status == 0 else { return [:] }
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+        guard let plist = try? PropertyListSerialization.propertyList(from: result.stdout, options: [], format: nil),
               let dict = plist as? [String: Any] else {
+            diskInfoCacheLock.lock()
+            diskInfoCache[mountPath] = ([:], Date(), false)
+            diskInfoCacheLock.unlock()
             return [:]
         }
+        diskInfoCacheLock.lock()
+        diskInfoCache[mountPath] = (dict, Date(), true)
+        diskInfoCacheLock.unlock()
         return dict
     }
 
@@ -1184,9 +1286,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       menu.directoryURL == dir else { return }
                 menu.loadWatchdogWorkItem?.cancel()
                 menu.loadWatchdogWorkItem = nil
-                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                // update() → menuNeedsUpdate が !loaded でプレースホルダに戻さないよう先に立てる
                 menu.loaded = true
                 menu.loadAttempt = 0
+                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
                 menu.update()
             }
         }
@@ -1278,44 +1381,56 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let keySet: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey, .localizedNameKey, .nameKey]
         let keyList = Array(keySet)
         let listingOptions: FileManager.DirectoryEnumerationOptions = includeHiddenFiles ? [] : [.skipsHiddenFiles]
-        guard let contents = withTimeout(timeout, {
-            try? FileManager.default.contentsOfDirectory(
+        // 列挙だけでなく属性取得・アクセス判定も含めてタイムアウトする（途中ハングで OperationQueue を塞がない）
+        let timeoutMessage = NSLocalizedString("menu.directory_list_timeout", comment: "")
+        guard let built = withTimeout(timeout, { () -> DirectorySnapshot in
+            guard let contents = try? FileManager.default.contentsOfDirectory(
                 at: dir,
                 includingPropertiesForKeys: keyList,
                 options: listingOptions
-            )
-        }).flatMap({ $0 }) else {
+            ) else {
+                return DirectorySnapshot(
+                    entries: [],
+                    totalCount: 0,
+                    error: NSError(
+                        domain: "DiskMonitor",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: timeoutMessage]
+                    )
+                )
+            }
+            let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool, isHidden: Bool)] = contents.map { url in
+                let vals = try? url.resourceValues(forKeys: keySet)
+                let isDir = vals?.isDirectory ?? false
+                let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
+                let accessible = isDirectoryEntryAccessible(at: url, isDirectory: isDir)
+                let isHidden = vals?.isHidden == true || name.hasPrefix(".")
+                return (url, isDir, name, accessible, isHidden)
+            }.sorted { a, b in
+                if a.isDir != b.isDir { return a.isDir && !b.isDir }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+            return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
+        }) else {
             DiskMonitorLog.slowIfNeeded(
                 "readDirectorySnapshot timeout",
                 started: started,
                 thresholdMs: 0,
                 extra: dir.path
             )
-            let message = NSLocalizedString("menu.directory_list_timeout", comment: "")
             return DirectorySnapshot(
                 entries: [],
                 totalCount: 0,
-                error: NSError(domain: "DiskMonitor", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+                error: NSError(domain: "DiskMonitor", code: 1, userInfo: [NSLocalizedDescriptionKey: timeoutMessage])
             )
-        }
-        let entries: [(url: URL, isDir: Bool, name: String, isAccessible: Bool, isHidden: Bool)] = contents.map { url in
-            let vals = try? url.resourceValues(forKeys: keySet)
-            let isDir = vals?.isDirectory ?? false
-            let name = vals?.localizedName ?? vals?.name ?? url.lastPathComponent
-            let accessible = isDirectoryEntryAccessible(at: url, isDirectory: isDir)
-            let isHidden = vals?.isHidden == true || name.hasPrefix(".")
-            return (url, isDir, name, accessible, isHidden)
-        }.sorted { a, b in
-            if a.isDir != b.isDir { return a.isDir && !b.isDir }
-            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
         DiskMonitorLog.slowIfNeeded(
             "readDirectorySnapshot",
             started: started,
             thresholdMs: 100,
-            extra: "\(dir.path) entries=\(entries.count) hidden=\(includeHiddenFiles)"
+            extra: "\(dir.path) entries=\(built.entries.count) hidden=\(includeHiddenFiles)"
         )
-        return DirectorySnapshot(entries: entries, totalCount: entries.count, error: nil)
+        return built
     }
 
     private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
@@ -1681,34 +1796,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private static func directorySizeViaDu(at url: URL, timeout: TimeInterval) -> Int64? {
-        let task = Process()
-        let pipe = Pipe()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-        task.arguments = ["-sk", url.path]
-        task.standardOutput = pipe
-        task.standardError = Pipe()
-        do {
-            try task.run()
-        } catch {
-            return nil
-        }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var data = Data()
-        var status: Int32 = -1
-        DispatchQueue.global(qos: .utility).async {
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            status = task.terminationStatus
-            semaphore.signal()
-        }
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            task.terminate()
-            return nil
-        }
-        guard status == 0,
-              let line = String(data: data, encoding: .utf8)?.split(whereSeparator: \.isNewline).first,
-              let kb = Int64(line.split(separator: "\t", maxSplits: 1).first ?? "") else {
+        guard let result = runProcess(
+            executable: "/usr/bin/du",
+            arguments: ["-sk", url.path],
+            timeout: timeout
+        ), result.status == 0,
+           let line = String(data: result.stdout, encoding: .utf8)?.split(whereSeparator: \.isNewline).first,
+           let kb = Int64(line.split(separator: "\t", maxSplits: 1).first ?? "") else {
             return nil
         }
         return kb * 1024
@@ -2014,12 +2108,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return anyAccessible ? total : nil
     }
 
+    private static let trashSizeFinderTimeout: TimeInterval = 8
+
     private static func calculateTrashSizeBytesWithFinder() -> Int64? {
         guard !finderTrashSizeDenied else { return nil }
         let started = CFAbsoluteTimeGetCurrent()
         // physical size of trash returns Finder's cached value (stale after file moves).
         // Summing each item individually via index forces a fresh per-item lookup.
         // try blocks inside the script absorb transient errors (e.g. item removed mid-loop).
+        // NSAppleScript はキャンセル不能で 100s 超ブロックし得るため、殺せる osascript 経由にする。
         let script = """
         tell application "Finder"
             set total to 0
@@ -2039,25 +2136,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return total
         end tell
         """
-        guard let appleScript = NSAppleScript(source: script) else { return nil }
-        var error: NSDictionary?
-        let result = appleScript.executeAndReturnError(&error)
-        if let error {
-            // -1743: automation not authorized — disable permanently
-            // other errors are transient; don't disable
-            let errorNumber = error[NSAppleScript.errorNumber] as? Int
-            if errorNumber == -1743 {
+        guard let result = runProcess(
+            executable: "/usr/bin/osascript",
+            arguments: ["-e", script],
+            timeout: trashSizeFinderTimeout
+        ) else {
+            DiskMonitorLog.slowIfNeeded("trashSizeFinder timeout", started: started, thresholdMs: 0)
+            return nil
+        }
+        let output = String(data: result.stdout, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if result.status != 0 {
+            // -1743: not authorized to send Apple events
+            if output.localizedCaseInsensitiveContains("not allowed")
+                || output.localizedCaseInsensitiveContains("not authorized")
+                || output.contains("-1743") {
                 finderTrashSizeDenied = true
             }
             return nil
         }
-        if let stringValue = result.stringValue,
-           let bytes = Int64(stringValue) {
-            DiskMonitorLog.slowIfNeeded("trashSizeFinder", started: started, thresholdMs: 200)
-            return bytes
-        }
-        let intValue = result.int32Value
-        let bytes = intValue >= 0 ? Int64(intValue) : nil
+        let bytes = Int64(output)
         DiskMonitorLog.slowIfNeeded("trashSizeFinder", started: started, thresholdMs: 200)
         return bytes
     }

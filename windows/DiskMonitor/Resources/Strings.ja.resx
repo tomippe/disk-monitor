@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="app.name" xml:space="preserve"><value>Disk Monitor</value></data>
+  <data name="status.loading" xml:space="preserve"><value>…</value></data>
+  <data name="status.unavailable" xml:space="preserve"><value>取得失敗</value></data>
+  <data name="status.tooltip" xml:space="preserve"><value>{0} の空き容量: {1}</value></data>
+  <data name="menu.more" xml:space="preserve"><value>その他</value></data>
+  <data name="menu.copy_status" xml:space="preserve"><value>状況をコピー</value></data>
+  <data name="menu.refresh" xml:space="preserve"><value>今すぐ更新</value></data>
+  <data name="menu.login_item" xml:space="preserve"><value>ログイン時に起動</value></data>
+  <data name="menu.restart_format" xml:space="preserve"><value>{0} を再起動</value></data>
+  <data name="menu.quit_format" xml:space="preserve"><value>{0} を終了</value></data>
+  <data name="menu.no_volumes" xml:space="preserve"><value>ボリューム情報なし</value></data>
+  <data name="menu.trash" xml:space="preserve"><value>ゴミ箱</value></data>
+  <data name="menu.empty_trash" xml:space="preserve"><value>ゴミ箱を空にする</value></data>
+  <data name="menu.open_disk_utility" xml:space="preserve"><value>ディスクの管理を開く</value></data>
+  <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
+  <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} 項目</value></data>
+  <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} 項目 - {1}</value></data>
+  <data name="menu.directory_empty" xml:space="preserve"><value>（空）</value></data>
+  <data name="menu.directory_read_error" xml:space="preserve"><value>（読み込めません: {0}）</value></data>
+  <data name="menu.add_to_favorites" xml:space="preserve"><value>お気に入りに追加</value></data>
+  <data name="menu.remove_from_favorites" xml:space="preserve"><value>お気に入りから取り除く</value></data>
+  <data name="menu.eject" xml:space="preserve"><value>取り出し</value></data>
+  <data name="menu.about" xml:space="preserve"><value>Disk Monitorについて</value></data>
+  <data name="menu.send_feedback" xml:space="preserve"><value>フィードバックを送る...</value></data>
+  <data name="menu.check_for_updates" xml:space="preserve"><value>アップデートを確認...</value></data>
+  <data name="about.format" xml:space="preserve"><value>バージョン {0}</value></data>
+</root>
