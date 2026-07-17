@@ -278,9 +278,6 @@ private final class DirectoryMenu: NSMenu {
     var folderItemCount = 0
     var includeHiddenFiles = false
     var favoriteMode: DirectoryFavoriteMode = .browse
-    /// 親項目と縦位置を揃える行（要約・お気に入り等のヘッダーより下の最初のコンテンツ）。
-    weak var alignBesideParentItem: NSMenuItem?
-    var alignTimer: Timer?
 }
 
 private struct DirectorySnapshot {
@@ -475,7 +472,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         if let dirMenu = menu as? DirectoryMenu {
             scheduleDirectoryDwellLoad(dirMenu)
-            scheduleAlignDirectorySubmenu(dirMenu)
             return
         }
         isMenuVisible = true
@@ -497,9 +493,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             dirMenu.loadWatchdogWorkItem = nil
             dirMenu.pendingUpdateWorkItem?.cancel()
             dirMenu.pendingUpdateWorkItem = nil
-            dirMenu.alignTimer?.invalidate()
-            dirMenu.alignTimer = nil
-            dirMenu.alignBesideParentItem = nil
             dirMenu.sizeUpdateGeneration &+= 1
             dirMenu.loaded = false
             dirMenu.loadAttempt = 0
@@ -1252,69 +1245,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showDirectoryWaitingPlaceholder(_ menu: DirectoryMenu) {
         menu.removeAllItems()
-        menu.alignBesideParentItem = nil
         let item = NSMenuItem(title: NSLocalizedString("menu.directory_loading", comment: ""), action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
-    }
-
-    // MARK: - サブメニュー縦位置（Windows AlignBesideParent 相当）
-
-    /// メニュー追跡中は `.eventTracking` でないとメインキューが動かないため Timer で揃える。
-    private func scheduleAlignDirectorySubmenu(_ menu: DirectoryMenu, attempt: Int = 0) {
-        menu.alignTimer?.invalidate()
-        let delay: TimeInterval = attempt == 0 ? 0.02 : 0.04
-        let timer = Timer(timeInterval: delay, repeats: false) { [weak self, weak menu] _ in
-            guard let self, let menu else { return }
-            menu.alignTimer = nil
-            if self.alignDirectorySubmenuIfNeeded(menu) { return }
-            if attempt < 6 {
-                self.scheduleAlignDirectorySubmenu(menu, attempt: attempt + 1)
-            }
-        }
-        RunLoop.main.add(timer, forMode: .eventTracking)
-        RunLoop.main.add(timer, forMode: .common)
-        menu.alignTimer = timer
-    }
-
-    /// 親項目の真横に `alignBesideParentItem` が来るようサブメニュー窓をずらす。成功で true。
-    @discardableResult
-    private func alignDirectorySubmenuIfNeeded(_ menu: DirectoryMenu) -> Bool {
-        guard let alignItem = menu.alignBesideParentItem, alignItem.menu === menu else { return true }
-        guard let parentItem = menu.supermenu?.items.first(where: { $0.submenu === menu }) else { return true }
-
-        let parentFrame = parentItem.accessibilityFrame()
-        let alignFrame = alignItem.accessibilityFrame()
-        guard parentFrame.height > 1, alignFrame.height > 1 else { return false }
-
-        let delta = parentFrame.midY - alignFrame.midY
-        guard abs(delta) >= 0.5 else { return true }
-        guard let window = popupMenuWindow(for: menu) else { return false }
-
-        var frame = window.frame
-        frame.origin.y += delta
-        if let screen = window.screen ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            if frame.maxY > visible.maxY {
-                frame.origin.y = visible.maxY - frame.height
-            }
-            if frame.minY < visible.minY {
-                frame.origin.y = visible.minY
-            }
-        }
-        window.setFrame(frame, display: true)
-        return true
-    }
-
-    private func popupMenuWindow(for menu: NSMenu) -> NSWindow? {
-        let menuFrame = menu.accessibilityFrame()
-        guard menuFrame.width > 1, menuFrame.height > 1 else { return nil }
-        return NSApp.windows.first { window in
-            guard window.isVisible else { return false }
-            let name = NSStringFromClass(type(of: window))
-            guard name.contains("NSPopupMenuWindow") else { return false }
-            return window.frame.intersects(menuFrame)
-        }
     }
 
     private static func optionKeyPressed() -> Bool {
@@ -1358,8 +1291,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.loadAttempt = 0
                 self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
                 menu.update()
-                // update 後に窓位置が変わることがあるので、揃えるのはその後。
-                self.scheduleAlignDirectorySubmenu(menu)
             }
         }
     }
@@ -1390,8 +1321,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.loadWatchdogWorkItem = nil
         menu.pendingUpdateWorkItem?.cancel()
         menu.pendingUpdateWorkItem = nil
-        menu.alignTimer?.invalidate()
-        menu.alignTimer = nil
         menu.sizeUpdateGeneration &+= 1
         menu.loaded = false
 
@@ -1404,12 +1333,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         showDirectoryLoadRecovery(menu)
         menu.update()
-        scheduleAlignDirectorySubmenu(menu)
     }
 
     private func showDirectoryLoadRecovery(_ menu: DirectoryMenu) {
         menu.removeAllItems()
-        menu.alignBesideParentItem = nil
         let message = NSMenuItem(
             title: NSLocalizedString("menu.directory_load_stuck", comment: ""),
             action: nil,
@@ -1426,7 +1353,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         retry.target = self
         retry.representedObject = menu
         menu.addItem(retry)
-        menu.alignBesideParentItem = retry
     }
 
     @objc private func reloadDirectoryMenu(_ sender: NSMenuItem) {
@@ -1438,8 +1364,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.loadWatchdogWorkItem = nil
         menu.pendingUpdateWorkItem?.cancel()
         menu.pendingUpdateWorkItem = nil
-        menu.alignTimer?.invalidate()
-        menu.alignTimer = nil
         menu.sizeUpdateGeneration &+= 1
         menu.loaded = false
         menu.loadAttempt = 0
@@ -1512,7 +1436,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
         let started = CFAbsoluteTimeGetCurrent()
         menu.removeAllItems()
-        menu.alignBesideParentItem = nil
         menu.sizeUpdateGeneration &+= 1
         menu.folderSizeMenuItem = nil
         guard let dir = menu.directoryURL else { return }
@@ -1552,7 +1475,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let err = NSMenuItem(title: String(format: format, error.localizedDescription), action: nil, keyEquivalent: "")
             err.isEnabled = false
             menu.addItem(err)
-            menu.alignBesideParentItem = err
             return
         }
 
@@ -1564,12 +1486,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             empty.isEnabled = false
             menu.addItem(empty)
-            menu.alignBesideParentItem = empty
             return
         }
 
         var iconEntries: [(url: URL, item: NSMenuItem)] = []
-        var didSetAlign = false
 
         for entry in snapshot.entries {
             let item = NSMenuItem(title: entry.name, action: #selector(openFileFromMenu(_:)), keyEquivalent: "")
@@ -1588,10 +1508,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 item.action = nil
             }
             menu.addItem(item)
-            if !didSetAlign {
-                menu.alignBesideParentItem = item
-                didSetAlign = true
-            }
             iconEntries.append((entry.url, item))
         }
 
@@ -1693,7 +1609,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard menu.sizeUpdateGeneration == generation else { return }
                 self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
                 menu.update()
-                self.scheduleAlignDirectorySubmenu(menu)
             }
         }
     }
