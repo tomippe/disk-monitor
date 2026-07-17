@@ -21,13 +21,16 @@
   <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
   <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} items</value></data>
   <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} items - {1}</value></data>
+  <data name="menu.directory_summary_includes_hidden" xml:space="preserve"><value> (including hidden items)</value></data>
   <data name="menu.directory_empty" xml:space="preserve"><value>(Empty)</value></data>
   <data name="menu.directory_read_error" xml:space="preserve"><value>(Can’t read: {0})</value></data>
   <data name="menu.add_to_favorites" xml:space="preserve"><value>Add to Favorites</value></data>
   <data name="menu.remove_from_favorites" xml:space="preserve"><value>Remove from Favorites</value></data>
+  <data name="menu.show_on_top_bar" xml:space="preserve"><value>Show on Top Bar</value></data>
+  <data name="menu.remove_from_top_bar" xml:space="preserve"><value>Remove from Top Bar</value></data>
   <data name="menu.eject" xml:space="preserve"><value>Eject</value></data>
   <data name="menu.about" xml:space="preserve"><value>About Disk Monitor</value></data>
-  <data name="menu.send_feedback" xml:space="preserve"><value>Send Feedback...</value></data>
-  <data name="menu.check_for_updates" xml:space="preserve"><value>Check for Updates...</value></data>
+  <data name="menu.send_feedback" xml:space="preserve"><value>Rate and review...</value></data>
   <data name="about.format" xml:space="preserve"><value>Version {0}</value></data>
+  <data name="alert.already_running_format" xml:space="preserve"><value>{0} is already running.</value></data>
 </root>

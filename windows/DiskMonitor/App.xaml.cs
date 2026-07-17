@@ -2,6 +2,7 @@ using System.Windows;
 using DiskMonitor.Helpers;
 using DiskMonitor.Services;
 using WinForms = System.Windows.Forms;
+using WinFormsApp = System.Windows.Forms.Application;
 
 namespace DiskMonitor;
 
@@ -13,6 +14,11 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Needed for Win11-styled Task Dialog / common controls v6.
+        WinFormsApp.EnableVisualStyles();
+        try { WinFormsApp.SetCompatibleTextRenderingDefault(false); }
+        catch { /* already initialized */ }
+
         base.OnStartup(e);
 
         if (!TryTakeSingleInstance())
@@ -20,6 +26,8 @@ public partial class App : System.Windows.Application
             Shutdown();
             return;
         }
+
+        AltKeyState.EnsureMessageHook();
 
         _bar = new AppBarWindow();
         _bar.StatusChanged += text =>
@@ -81,11 +89,9 @@ public partial class App : System.Windows.Application
         _mutex = new Mutex(true, name, out var created);
         if (created) return true;
 
-        System.Windows.MessageBox.Show(
-            "Disk Monitor is already running.",
-            "Disk Monitor",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        AppDialog.Information(
+            L.Get("app.name"),
+            string.Format(L.Get("alert.already_running_format"), L.Get("app.name")));
         _mutex.Dispose();
         _mutex = null;
         return false;

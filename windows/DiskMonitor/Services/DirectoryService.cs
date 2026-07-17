@@ -8,7 +8,8 @@ public sealed record DirectoryEntry(
     string Path,
     string Name,
     bool IsDirectory,
-    bool IsAccessible);
+    bool IsAccessible,
+    bool IsHidden);
 
 public sealed record DirectorySnapshot(
     IReadOnlyList<DirectoryEntry> Entries,
@@ -43,17 +44,22 @@ public static class DirectoryService
                     var name = Path.GetFileName(path);
                     if (string.IsNullOrEmpty(name)) continue;
                     var attrs = File.GetAttributes(path);
-                    if (!includeHidden
-                        && ((attrs & FileAttributes.Hidden) != 0 || (attrs & FileAttributes.System) != 0))
+                    var isHidden = (attrs & FileAttributes.Hidden) != 0
+                                   || (attrs & FileAttributes.System) != 0;
+                    if (!includeHidden && isHidden)
                         continue;
 
                     var isDir = (attrs & FileAttributes.Directory) != 0;
-                    entries.Add(new DirectoryEntry(path, name, isDir, IsAccessible: true));
+                    // Accessibility probe is relatively expensive — do it after sort, still off UI.
+                    entries.Add(new DirectoryEntry(path, name, isDir, IsAccessible: true, isHidden));
                 }
                 catch
                 {
                     var name = Path.GetFileName(path);
-                    entries.Add(new DirectoryEntry(path, name, false, IsAccessible: false));
+                    // Unknown attrs — only show when including hidden (likely protected).
+                    if (!includeHidden) continue;
+                    entries.Add(new DirectoryEntry(
+                        path, name, IsDirectory: false, IsAccessible: false, IsHidden: true));
                 }
             }
 
@@ -64,6 +70,16 @@ public static class DirectoryService
                 return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
             });
 
+            // Probe dirs only (files stay accessible) — keeps listing responsive on huge folders.
+            for (var i = 0; i < entries.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var e = entries[i];
+                if (!e.IsDirectory) continue;
+                if (!IsEntryAccessible(e.Path, isDirectory: true))
+                    entries[i] = e with { IsAccessible = false };
+            }
+
             return new DirectorySnapshot(entries, entries.Count, null);
         }
         catch (OperationCanceledException)
@@ -73,6 +89,27 @@ public static class DirectoryService
         catch (Exception ex)
         {
             return new DirectorySnapshot([], 0, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Mac <c>isReadable && isExecutable</c> for dirs. Files that already yielded
+    /// attributes are treated as accessible (avoid opening every file while listing).
+    /// </summary>
+    public static bool IsEntryAccessible(string path, bool isDirectory)
+    {
+        if (!isDirectory)
+            return true;
+
+        try
+        {
+            using var e = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+            _ = e.MoveNext();
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 

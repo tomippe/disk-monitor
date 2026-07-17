@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <data name="AppDisplayName" xml:space="preserve">
+    <value>Disk Monitor</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>画面下端の AppBar にディスクの空き容量を表示します。</value>
+  </data>
+</root>

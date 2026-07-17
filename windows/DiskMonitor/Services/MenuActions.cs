@@ -3,6 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
+using DiskMonitor.Helpers;
 using Microsoft.Win32;
 
 namespace DiskMonitor.Services;
@@ -51,20 +52,58 @@ public static class MenuActions
         }
     }
 
-    public static long RecycleBinBytes()
+    private static readonly object TrashSizeGate = new();
+    private static long _trashBytesCached;
+    private static long _trashBytesCachedAtMs = -10_000;
+    private const int TrashCacheTtlMs = 8_000;
+
+    /// <summary>Last known size — never blocks (UI-safe).</summary>
+    public static long PeekRecycleBinBytes()
     {
+        lock (TrashSizeGate) return _trashBytesCached;
+    }
+
+    public static long RecycleBinBytes(bool forceRefresh = false)
+    {
+        lock (TrashSizeGate)
+        {
+            var age = Environment.TickCount64 - _trashBytesCachedAtMs;
+            if (!forceRefresh && age >= 0 && age < TrashCacheTtlMs)
+                return _trashBytesCached;
+        }
+
+        long total = 0;
         try
         {
-            long total = 0;
+            // Default packing (24 bytes): Pack=4 made cbSize=20 and Windows often returns 0.
             var info = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
             if (SHQueryRecycleBin(null, ref info) == 0)
+            {
                 total = info.i64Size;
-            return total;
+            }
+            else
+            {
+                foreach (var drive in DriveInfo.GetDrives())
+                {
+                    if (!drive.IsReady) continue;
+                    info = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
+                    if (SHQueryRecycleBin(drive.Name, ref info) == 0)
+                        total += info.i64Size;
+                }
+            }
         }
         catch
         {
-            return 0;
+            total = 0;
         }
+
+        lock (TrashSizeGate)
+        {
+            _trashBytesCached = total;
+            _trashBytesCachedAtMs = Environment.TickCount64;
+        }
+
+        return total;
     }
 
     public static void OpenDiskManagement()
@@ -103,11 +142,9 @@ public static class MenuActions
 
     public static void ShowAbout()
     {
-        System.Windows.MessageBox.Show(
-            string.Format(L.Get("about.format"), AppVersion(), AppVersion()),
+        AppDialog.Information(
             L.Get("menu.about"),
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+            string.Format(L.Get("about.format"), AppVersion(), AppVersion()));
     }
 
     public static void RestartApp()
@@ -156,7 +193,7 @@ public static class MenuActions
         catch { /* ignore */ }
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    [StructLayout(LayoutKind.Sequential)]
     private struct SHQUERYRBINFO
     {
         public int cbSize;

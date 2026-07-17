@@ -7,14 +7,14 @@
 ## URL
 
 - 紹介ページ: https://apps.tomippe.jp/disk-monitor/
-- プライバシーポリシー: https://apps.tomippe.jp/disk-monitor/policy/（未作成の場合は WP で子ページを作成後、下記 ID・URL を更新）
+- プライバシーポリシー: https://apps.tomippe.jp/disk-monitor/policy/
 
 ## WordPress 投稿 ID
 
 | 用途 | ID |
 |------|-----|
 | 紹介ページ（app） | **2274** |
-| プライバシーポリシー（app・子ページ） | 未作成 |
+| プライバシーポリシー（app・子ページ） | **2408** |
 
 ## キャッチフレーズ（app-cp）
 

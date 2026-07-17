@@ -5,8 +5,8 @@ using System.Windows.Interop;
 namespace DiskMonitor.Helpers;
 
 /// <summary>
-/// Registers a WPF window as a bottom-left content-width AppBar (SHAppBarMessage).
-/// Stacks above the taskbar via the shell AppBar negotiation.
+/// Full-width bottom AppBar (SHAppBarMessage), stacked above the taskbar.
+/// Chip fit uses window width minus the more-button width.
 /// </summary>
 public sealed class AppBarHelper : IDisposable
 {
@@ -17,7 +17,6 @@ public sealed class AppBarHelper : IDisposable
     private readonly uint _callbackMsg;
     private bool _registered;
     private bool _disposed;
-    private double _contentWidthDip = 160;
 
     public AppBarHelper(Window window)
     {
@@ -42,16 +41,6 @@ public sealed class AppBarHelper : IDisposable
         PositionBar();
     }
 
-    public void SetContentWidth(double widthDip)
-    {
-        if (widthDip < 40) widthDip = 40;
-        if (Math.Abs(_contentWidthDip - widthDip) < 0.5 && _registered)
-            return;
-        _contentWidthDip = widthDip;
-        if (_registered)
-            PositionBar();
-    }
-
     public void PositionBar()
     {
         if (!_registered) return;
@@ -60,38 +49,38 @@ public sealed class AppBarHelper : IDisposable
         var dpi = GetDpiForWindow(hwnd);
         if (dpi == 0) dpi = 96;
         var heightPx = (int)Math.Ceiling(BarHeightDip * dpi / 96.0);
-        var widthPx = (int)Math.Ceiling(_contentWidthDip * dpi / 96.0);
 
         var screen = System.Windows.Forms.Screen.PrimaryScreen
             ?? System.Windows.Forms.Screen.AllScreens.First();
         var leftBound = screen.Bounds.Left;
+        var rightBound = screen.Bounds.Right;
         var bottom = screen.Bounds.Bottom;
+        var widthPx = rightBound - leftBound;
+        var widthDip = widthPx * 96.0 / dpi;
 
         var abd = NewData();
         abd.uEdge = ABE_BOTTOM;
         abd.rc.left = leftBound;
-        abd.rc.right = leftBound + widthPx;
+        abd.rc.right = rightBound;
         abd.rc.bottom = bottom;
         abd.rc.top = bottom - heightPx;
 
         SHAppBarMessage(ABM_QUERYPOS, ref abd);
-        // Keep left-aligned content width after shell negotiation.
         abd.rc.left = leftBound;
-        abd.rc.right = leftBound + widthPx;
+        abd.rc.right = rightBound;
         abd.rc.top = abd.rc.bottom - heightPx;
         SHAppBarMessage(ABM_SETPOS, ref abd);
 
-        var left = leftBound;
         var top = abd.rc.bottom - heightPx;
         SetWindowPos(
             hwnd, HWND_TOPMOST,
-            left, top,
+            leftBound, top,
             widthPx, heightPx,
             SWP_SHOWWINDOW);
 
-        _window.Left = left * 96.0 / dpi;
+        _window.Left = leftBound * 96.0 / dpi;
         _window.Top = top * 96.0 / dpi;
-        _window.Width = _contentWidthDip;
+        _window.Width = widthDip;
         _window.Height = BarHeightDip;
     }
 

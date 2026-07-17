@@ -6,8 +6,9 @@ namespace DiskMonitor.Services;
 public sealed record VolumeInfo(
     string Name,
     string RootPath,
-    long AvailableBytes,
-    long TotalBytes,
+    /// <summary>Null when free space could not be read — chip still appears without trailing size.</summary>
+    long? AvailableBytes,
+    long? TotalBytes,
     bool IsReady,
     DriveType DriveType);
 
@@ -18,14 +19,26 @@ public static class VolumeService
         var list = new List<VolumeInfo>();
         foreach (var drive in DriveInfo.GetDrives())
         {
+            string root;
+            string name;
+            DriveType type;
             try
             {
-                var root = drive.RootDirectory.FullName;
-                var name = ShellVolumeHelper.GetMenuDisplayName(root);
+                root = drive.RootDirectory.FullName;
+                name = ShellVolumeHelper.GetMenuDisplayName(root);
+                type = drive.DriveType;
+            }
+            catch
+            {
+                continue;
+            }
 
+            try
+            {
                 if (!drive.IsReady)
                 {
-                    list.Add(new VolumeInfo(name, root, 0, 0, false, drive.DriveType));
+                    // Still show on the AppBar / menus — no capacity label.
+                    list.Add(new VolumeInfo(name, root, null, null, false, type));
                     continue;
                 }
 
@@ -35,11 +48,12 @@ public static class VolumeService
                     drive.AvailableFreeSpace,
                     drive.TotalSize,
                     true,
-                    drive.DriveType));
+                    type));
             }
             catch
             {
-                // Skip inaccessible volumes
+                // Capacity (or readiness) failed — keep the volume, omit size.
+                list.Add(new VolumeInfo(name, root, null, null, false, type));
             }
         }
 
@@ -52,9 +66,11 @@ public static class VolumeService
     public static VolumeInfo? SystemVolume()
     {
         var systemRoot = Path.GetPathRoot(Environment.SystemDirectory) ?? "C:\\";
-        return ListVolumes().FirstOrDefault(v =>
-            string.Equals(v.RootPath, systemRoot, StringComparison.OrdinalIgnoreCase))
-            ?? ListVolumes().FirstOrDefault(v => v.IsReady && v.DriveType == DriveType.Fixed);
+        var volumes = ListVolumes();
+        return volumes.FirstOrDefault(v =>
+                   string.Equals(v.RootPath, systemRoot, StringComparison.OrdinalIgnoreCase))
+               ?? volumes.FirstOrDefault(v => v.DriveType == DriveType.Fixed)
+               ?? volumes.FirstOrDefault();
     }
 
     public static string FormatBytes(long bytes, bool concise = true)
@@ -83,8 +99,7 @@ public static class VolumeService
         return concise ? $"{number}{units[unit]}" : $"{number} {units[unit]}";
     }
 
-    /// <summary>AppBar / menu bar: free space only (Mac-style).</summary>
+    /// <summary>AppBar / menu bar: free space only (Mac-style). Empty when unknown.</summary>
     public static string StatusLine(VolumeInfo vol) =>
-        FormatBytes(vol.AvailableBytes, concise: true);
-
+        vol.AvailableBytes is long bytes ? FormatBytes(bytes, concise: true) : "";
 }

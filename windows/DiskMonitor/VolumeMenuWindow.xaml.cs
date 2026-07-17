@@ -1,12 +1,13 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using DiskMonitor.Helpers;
-using Microsoft.Win32;
 using WpfBrushes = System.Windows.Media.Brushes;
-using WpfColor = System.Windows.Media.Color;
 using WpfCursors = System.Windows.Input.Cursors;
 using WpfImage = System.Windows.Controls.Image;
 
@@ -17,30 +18,57 @@ public partial class VolumeMenuWindow : Window
     private const double IconSize = 18;
     private const double FontSizeDip = 13;
     private const double RowHeight = 30;
-    private const double SubmenuDwellMs = 160;
+    /// <summary>First-open dwell (hover → open submenu).</summary>
+    private const double SubmenuOpenDwellMs = 140;
+    /// <summary>Switch/close dwell while a submenu is already open (diagonal move forgiveness).</summary>
+    private const double SubmenuSwitchDwellMs = 420;
     private const double EdgePad = 8;
     private const double ChromeMargin = 10;
+    /// <summary>Win+X / Start context menu style slide (no fade).</summary>
+    private const double OpenSlideDip = 12;
+    private static readonly Duration OpenSlideDuration = TimeSpan.FromMilliseconds(167);
+
+    private enum OpenSlideKind { Above, BesideRight, BesideLeft }
 
     private bool _closing;
-    private bool _canCloseOnDeactivate;
     private bool _isRoot;
+    private bool _openTransitionPlayed;
     private DispatcherTimer? _submenuTimer;
     private Border? _pendingSubmenuRow;
     private MenuItemSpec? _pendingSubmenuSpec;
+    private bool _pendingCloseChild;
     private Border? _openSubmenuRow;
     private VolumeMenuWindow? _child;
     private int _loadGeneration;
     private CancellationTokenSource? _loadCts;
     private readonly Dictionary<string, TextBlock> _titleBlocksByTag = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TextBlock> _trailingBlocksByTag = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WpfImage> _iconImagesByPath = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Parent row top in DIP (screen); first AlignBesideParent child lines up with this.</summary>
+    private double? _besideParentRowTop;
+    private double? _aboveAnchorTop;
+    private VolumeMenuWindow? _besideParent;
+    private Border? _alignAnchorRow;
+    private SolidColorBrush? _hoverBrush;
+    private bool _listedWithHidden;
+    private Action? _relistDirectory;
 
     public VolumeMenuWindow()
     {
         InitializeComponent();
         ApplyTheme();
+        AltKeyState.EnsureMessageHook();
+        SourceInitialized += (_, _) =>
+        {
+            var src = (HwndSource?)PresentationSource.FromVisual(this);
+            if (src is not null)
+                AltKeyState.Attach(src);
+        };
         Closed += (_, _) =>
         {
             CancelSubmenuTimer();
             CancelLoad();
+            _relistDirectory = null;
             MenuSession.Unregister(this);
         };
     }
@@ -63,47 +91,92 @@ public partial class VolumeMenuWindow : Window
     {
         ItemsHost.Children.Clear();
         _titleBlocksByTag.Clear();
+        _trailingBlocksByTag.Clear();
+        _iconImagesByPath.Clear();
+        _alignAnchorRow = null;
         foreach (var item in items)
         {
             if (item.IsSeparator)
                 ItemsHost.Children.Add(CreateSeparator());
+            else if (item.IsAlignSpacer)
+                ItemsHost.Children.Add(CreateAlignSpacer(item));
             else
                 ItemsHost.Children.Add(CreateRow(item));
         }
-        UpdateLayout();
-        ApplyMaxHeight();
+        // Content often grows after the first show (loading → listing) — re-clamp every time.
+        if (IsVisible)
+            RefitInWorkArea();
+        else
+        {
+            UpdateLayout();
+            ApplyMaxHeightForWorkArea();
+        }
     }
 
-    public void UpdateTaggedTitle(string tag, string title)
+    public void UpdateTaggedTitle(
+        string tag,
+        string title,
+        string? italicSuffix = null,
+        string? trailingSuffix = null)
     {
-        if (_titleBlocksByTag.TryGetValue(tag, out var block))
-            block.Text = title;
+        if (!_titleBlocksByTag.TryGetValue(tag, out var block)) return;
+        block.Inlines.Clear();
+        block.Inlines.Add(new Run(title));
+        if (!string.IsNullOrEmpty(italicSuffix))
+            block.Inlines.Add(new Run(italicSuffix) { FontStyle = FontStyles.Italic });
+        // e.g. "（隠しファイルを含む）" after capacity — not italic (Mac).
+        if (!string.IsNullOrEmpty(trailingSuffix))
+            block.Inlines.Add(new Run(trailingSuffix));
     }
 
-    public void ShowAbove(Window anchor)
+    public void UpdateTaggedTrailing(string tag, string text)
+    {
+        if (_trailingBlocksByTag.TryGetValue(tag, out var block))
+            block.Text = text;
+    }
+
+    public void UpdateIcon(string path, ImageSource icon)
+    {
+        if (_iconImagesByPath.TryGetValue(path, out var image))
+            image.Source = icon;
+    }
+
+    public void ShowAbove(Window anchor) =>
+        ShowAboveElement(anchor, new System.Windows.Point(0, 0));
+
+    public void ShowAbove(FrameworkElement anchor) =>
+        ShowAboveElement(anchor, new System.Windows.Point(0, 0));
+
+    private void ShowAboveElement(Visual anchor, System.Windows.Point elementPoint)
     {
         _isRoot = true;
         ShowActivated = true;
 
-        var pixelTopLeft = anchor.PointToScreen(new System.Windows.Point(0, 0));
+        var pixelTopLeft = anchor is UIElement ui
+            ? ui.PointToScreen(elementPoint)
+            : new System.Windows.Point(0, 0);
         var fromDevice = PresentationSource.FromVisual(anchor)?.CompositionTarget?.TransformFromDevice
                          ?? Matrix.Identity;
         var dipTopLeft = fromDevice.Transform(pixelTopLeft);
 
-        _canCloseOnDeactivate = false;
+        // Capture Alt before Activate — focus changes can disturb WPF key state.
+        AltKeyState.Capture();
+
         MenuSession.Register(this);
 
         Left = dipTopLeft.X;
-        Top = 0;
+        _aboveAnchorTop = dipTopLeft.Y;
+        _besideParentRowTop = null;
+        _besideParent = null;
+        _openTransitionPlayed = false;
         Show();
-        UpdateLayout();
         FitAbove(dipTopLeft.Y);
+        PlayOpenSlide(OpenSlideKind.Above);
         Activate();
         Focus();
 
         Dispatcher.BeginInvoke(() =>
         {
-            _canCloseOnDeactivate = true;
             FitAbove(dipTopLeft.Y);
             Activate();
         }, DispatcherPriority.ApplicationIdle);
@@ -115,26 +188,90 @@ public partial class VolumeMenuWindow : Window
         // Keep parent activation — avoids closing the chain when a child opens.
         ShowActivated = false;
 
-        var pixel = row.PointToScreen(new System.Windows.Point(row.ActualWidth + 2, 0));
         var fromDevice = PresentationSource.FromVisual(parent)?.CompositionTarget?.TransformFromDevice
                          ?? Matrix.Identity;
-        var dip = fromDevice.Transform(pixel);
+        var rowLeftDip = fromDevice.Transform(row.PointToScreen(new System.Windows.Point(0, 0)));
 
-        _canCloseOnDeactivate = false;
+        AltKeyState.Capture();
+
         MenuSession.Register(this);
 
-        Left = dip.X;
-        Top = Math.Max(SystemParameters.WorkArea.Top + EdgePad, dip.Y - 6);
+        // Measure first (off-screen) so we know width for left/right flip.
+        Left = -10000;
+        Top = -10000;
+        _openTransitionPlayed = false;
         Show();
-        UpdateLayout();
-        FitInWorkArea();
+
+        _besideParent = parent;
+        _besideParentRowTop = rowLeftDip.Y;
+        _aboveAnchorTop = null;
+
+        var slide = FitBeside();
+        PlayOpenSlide(slide);
+
         parent.Activate();
 
-        Dispatcher.BeginInvoke(() =>
+        Dispatcher.BeginInvoke(() => FitBeside(), DispatcherPriority.ApplicationIdle);
+    }
+
+    /// <summary>
+    /// Start-button / Win+X style: translate only (no opacity fade).
+    /// Skipped when system animations are off.
+    /// </summary>
+    private void PlayOpenSlide(OpenSlideKind kind)
+    {
+        if (_openTransitionPlayed) return;
+        _openTransitionPlayed = true;
+
+        if (!SystemParameters.ClientAreaAnimation && !SystemParameters.MenuAnimation)
         {
-            _canCloseOnDeactivate = true;
-            FitInWorkArea();
-        }, DispatcherPriority.ApplicationIdle);
+            Chrome.RenderTransform = null;
+            return;
+        }
+
+        double fromX = 0;
+        double fromY = 0;
+        switch (kind)
+        {
+            case OpenSlideKind.Above:
+                // Rise up from the AppBar (same feel as taskbar menus).
+                fromY = OpenSlideDip;
+                break;
+            case OpenSlideKind.BesideRight:
+                fromX = -OpenSlideDip;
+                break;
+            case OpenSlideKind.BesideLeft:
+                fromX = OpenSlideDip;
+                break;
+        }
+
+        var transform = new TranslateTransform(fromX, fromY);
+        Chrome.RenderTransform = transform;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var ax = new DoubleAnimation(fromX, 0, OpenSlideDuration) { EasingFunction = ease };
+        var ay = new DoubleAnimation(fromY, 0, OpenSlideDuration) { EasingFunction = ease };
+        transform.BeginAnimation(TranslateTransform.XProperty, ax);
+        transform.BeginAnimation(TranslateTransform.YProperty, ay);
+    }
+
+    /// <summary>Wire directory listing so Alt toggle while open can relist (Mac Option).</summary>
+    public void BindDirectoryRelist(bool includeHidden, Action relist)
+    {
+        _listedWithHidden = includeHidden;
+        _relistDirectory = relist;
+    }
+
+    /// <summary>Returns true if this window started a relist.</summary>
+    public bool PollAltForRelist()
+    {
+        if (_relistDirectory is null || _closing) return false;
+        var alt = AltKeyState.IsDown();
+        if (alt == _listedWithHidden) return false;
+        _listedWithHidden = alt;
+        AltKeyState.Capture(alt);
+        _relistDirectory();
+        return true;
     }
 
     public void ForceClose()
@@ -152,32 +289,113 @@ public partial class VolumeMenuWindow : Window
         _loadCts = null;
     }
 
-    private void ApplyMaxHeight()
+    private void RefitInWorkArea()
+    {
+        if (_aboveAnchorTop is double anchor)
+            FitAbove(anchor);
+        else if (_besideParent is not null)
+            FitBeside();
+        else
+        {
+            ApplyMaxHeightForWorkArea();
+            UpdateLayout();
+            ClampToWorkArea();
+        }
+    }
+
+    /// <summary>Hard cap so the window (incl. chrome margin) never exceeds the work area height.</summary>
+    private void ApplyMaxHeightForWorkArea()
     {
         var work = SystemParameters.WorkArea;
-        var max = Math.Max(120, work.Height - EdgePad * 2 - ChromeMargin * 2);
-        ItemsScroll.MaxHeight = max;
+        var maxWindow = Math.Max(120, work.Height - EdgePad * 2);
+        ItemsScroll.MaxHeight = Math.Max(80, maxWindow - ChromeOverhead());
+    }
+
+    private double ChromeOverhead()
+    {
+        // Margin + border + padding outside the scroll viewport.
+        const double borderAndPadding = 2 + 8; // BorderThickness 1*2 + Padding approx
+        return ChromeMargin * 2 + borderAndPadding;
     }
 
     private void FitAbove(double anchorTopDip)
     {
+        _aboveAnchorTop = anchorTopDip;
         var work = SystemParameters.WorkArea;
-        var maxH = Math.Max(120, anchorTopDip - work.Top - EdgePad - ChromeMargin * 2 - 4);
-        ItemsScroll.MaxHeight = maxH;
+        var maxWindow = Math.Max(120, anchorTopDip - work.Top - EdgePad - 4);
+        ItemsScroll.MaxHeight = Math.Max(80, maxWindow - ChromeOverhead());
         UpdateLayout();
 
         Left = Math.Clamp(Left, work.Left + EdgePad, Math.Max(work.Left + EdgePad, work.Right - EdgePad - ActualWidth));
         Top = Math.Max(work.Top + EdgePad, anchorTopDip - ActualHeight - 4);
-        if (Top + ActualHeight > work.Bottom - EdgePad)
-            Top = Math.Max(work.Top + EdgePad, work.Bottom - EdgePad - ActualHeight);
+        ClampToWorkArea();
     }
 
-    private void FitInWorkArea()
+    private OpenSlideKind FitBeside()
     {
-        var work = SystemParameters.WorkArea;
-        ApplyMaxHeight();
+        if (_besideParent is null) return OpenSlideKind.BesideRight;
+
+        // Full work-area height (Mac-style). Don't clip to space below the focused row.
+        ApplyMaxHeightForWorkArea();
         UpdateLayout();
 
+        var parent = _besideParent;
+        var fromDevice = PresentationSource.FromVisual(parent)?.CompositionTarget?.TransformFromDevice
+                         ?? Matrix.Identity;
+        // Use parent Chrome edges (includes scrollbar), not the focused row — avoids scrollbar-width overlap.
+        var parentLeft = fromDevice.Transform(parent.Chrome.PointToScreen(new System.Windows.Point(0, 0))).X;
+        var parentRight = fromDevice.Transform(
+            parent.Chrome.PointToScreen(new System.Windows.Point(parent.Chrome.ActualWidth, 0))).X;
+
+        var work = SystemParameters.WorkArea;
+        const double gap = 2;
+        var placeRight = parentRight + gap - ChromeMargin;
+        var placeLeft = parentLeft - gap + ChromeMargin - ActualWidth;
+        OpenSlideKind slide;
+        if (placeRight + ActualWidth <= work.Right - EdgePad)
+        {
+            Left = placeRight;
+            slide = OpenSlideKind.BesideRight;
+        }
+        else if (placeLeft >= work.Left + EdgePad)
+        {
+            Left = placeLeft;
+            slide = OpenSlideKind.BesideLeft;
+        }
+        else
+        {
+            Left = Math.Clamp(placeRight, work.Left + EdgePad, work.Right - EdgePad - ActualWidth);
+            slide = OpenSlideKind.BesideRight;
+        }
+
+        // Align the first content row (not summary / favorites) with the parent item.
+        // Header rows sit above that. Bottom-aligning to the screen skips this rule.
+        var alignOffset = MeasureAlignOffsetFromWindowTop();
+        var parentRowTop = _besideParentRowTop ?? (work.Top + EdgePad);
+        Top = parentRowTop - alignOffset;
+        if (Top + ActualHeight > work.Bottom - EdgePad)
+            Top = work.Bottom - EdgePad - ActualHeight;
+        if (Top < work.Top + EdgePad)
+            Top = work.Top + EdgePad;
+
+        ClampToWorkArea();
+        return slide;
+    }
+
+    /// <summary>Distance from this window's top to the row that should sit beside the parent item.</summary>
+    private double MeasureAlignOffsetFromWindowTop()
+    {
+        UpdateLayout();
+        if (_alignAnchorRow is not null)
+            return _alignAnchorRow.TranslatePoint(new System.Windows.Point(0, 0), this).Y;
+
+        // Loading / no anchor yet — line up the panel top with the parent row.
+        return ChromeMargin;
+    }
+
+    private void ClampToWorkArea()
+    {
+        var work = SystemParameters.WorkArea;
         if (Left + ActualWidth > work.Right - EdgePad)
             Left = Math.Max(work.Left + EdgePad, work.Right - EdgePad - ActualWidth);
         if (Left < work.Left + EdgePad)
@@ -188,12 +406,23 @@ public partial class VolumeMenuWindow : Window
             Top = work.Top + EdgePad;
     }
 
+    private SolidColorBrush HoverBrush
+    {
+        get
+        {
+            if (_hoverBrush is null)
+            {
+                var (_, _, _, _, hover) = AppTheme.MenuColors();
+                _hoverBrush = new SolidColorBrush(hover);
+                _hoverBrush.Freeze();
+            }
+            return _hoverBrush;
+        }
+    }
+
     private Border CreateRow(MenuItemSpec spec)
     {
-        var dark = IsDarkTheme();
-        var fg = dark ? WpfColor.FromRgb(0xF3, 0xF3, 0xF3) : WpfColor.FromRgb(0x1A, 0x1A, 0x1A);
-        var fgMuted = dark ? WpfColor.FromRgb(0xC0, 0xC0, 0xC0) : WpfColor.FromRgb(0x5A, 0x5A, 0x5A);
-        var hover = dark ? WpfColor.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : WpfColor.FromArgb(0x14, 0x00, 0x00, 0x00);
+        var (_, _, fg, fgMuted, _) = AppTheme.MenuColors();
         var iconBrush = new SolidColorBrush(fg);
         iconBrush.Freeze();
 
@@ -207,28 +436,35 @@ public partial class VolumeMenuWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(spec.HasSubmenu ? 18 : 6) });
 
-        if (spec.Icon is not null)
+        var titleMuted = !spec.Enabled || spec.Muted;
+        // Always paint Segoe glyphs on the UI thread with the menu theme brush.
+        var iconSource = spec.Glyph != AppGlyph.None
+            ? MenuIcons.Create(spec.Glyph, iconBrush, IconSize)
+            : spec.Icon;
+        if (iconSource is not null || !string.IsNullOrEmpty(spec.IconPath))
         {
             var image = new WpfImage
             {
-                Source = spec.Icon,
+                Source = iconSource,
                 Width = IconSize,
                 Height = IconSize,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Opacity = spec.Enabled ? 1 : 0.45,
+                Opacity = titleMuted ? 0.45 : 1,
                 SnapsToDevicePixels = true
             };
             RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
             Grid.SetColumn(image, 0);
             grid.Children.Add(image);
+            if (!string.IsNullOrEmpty(spec.IconPath))
+                _iconImagesByPath[spec.IconPath] = image;
         }
 
         var titleBlock = new TextBlock
         {
             Text = spec.Title,
             FontSize = FontSizeDip,
-            Foreground = new SolidColorBrush(spec.Enabled ? fg : fgMuted),
+            Foreground = new SolidColorBrush(titleMuted ? fgMuted : fg),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             Margin = new Thickness(0, 0, 8, 0)
@@ -238,12 +474,13 @@ public partial class VolumeMenuWindow : Window
         if (!string.IsNullOrEmpty(spec.Tag))
             _titleBlocksByTag[spec.Tag] = titleBlock;
 
-        if (!string.IsNullOrEmpty(spec.Trailing))
+        if (!string.IsNullOrEmpty(spec.Trailing) || !string.IsNullOrEmpty(spec.TrailingTag))
         {
             var freeBlock = new TextBlock
             {
-                Text = spec.Trailing,
+                Text = spec.Trailing ?? "",
                 FontSize = FontSizeDip,
+                FontStyle = spec.TrailingItalic ? FontStyles.Italic : FontStyles.Normal,
                 Foreground = new SolidColorBrush(fgMuted),
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
@@ -251,6 +488,8 @@ public partial class VolumeMenuWindow : Window
             };
             Grid.SetColumn(freeBlock, 2);
             grid.Children.Add(freeBlock);
+            if (!string.IsNullOrEmpty(spec.TrailingTag))
+                _trailingBlocksByTag[spec.TrailingTag] = freeBlock;
         }
 
         if (spec.HasSubmenu)
@@ -273,25 +512,40 @@ public partial class VolumeMenuWindow : Window
             Child = grid,
             CornerRadius = new CornerRadius(3),
             Background = WpfBrushes.Transparent,
-            Cursor = spec.Enabled ? WpfCursors.Hand : WpfCursors.Arrow,
+            Cursor = spec.Enabled || spec.HasSubmenu ? WpfCursors.Hand : WpfCursors.Arrow,
             Tag = spec
         };
+        if (spec.AlignBesideParent && _alignAnchorRow is null)
+            _alignAnchorRow = border;
 
-        if (spec.Enabled)
+        // Gray (Enabled=false) rows can still open a favorites-only submenu, like Mac.
+        if (spec.Enabled || (spec.HasSubmenu && spec.PopulateSubmenu is not null))
         {
             border.MouseEnter += (_, _) =>
             {
-                border.Background = new SolidColorBrush(hover);
+                border.Background = HoverBrush;
+                AltKeyState.NotePointerGesture();
+
                 if (spec.HasSubmenu && spec.PopulateSubmenu is not null)
                     ScheduleSubmenu(border, spec);
                 else
-                    CloseChild();
+                    ScheduleCloseChild();
             };
-            border.MouseLeave += (_, _) => border.Background = WpfBrushes.Transparent;
+            border.MouseLeave += (_, _) =>
+            {
+                // Leaving a briefly-hovered neighbor cancels a pending switch (diagonal to submenu).
+                if (_pendingSubmenuRow == border || _pendingCloseChild)
+                    CancelSubmenuTimer();
+
+                // Parent with an open submenu keeps focus background so the chain stays clear.
+                if (_openSubmenuRow == border)
+                    return;
+                border.Background = WpfBrushes.Transparent;
+            };
             border.MouseLeftButtonUp += (_, e) =>
             {
                 e.Handled = true;
-                if (spec.OnClick is not null)
+                if (spec.Enabled && spec.OnClick is not null)
                 {
                     var click = spec.OnClick;
                     MenuSession.CloseAll();
@@ -301,6 +555,7 @@ public partial class VolumeMenuWindow : Window
                 if (spec.HasSubmenu && spec.PopulateSubmenu is not null)
                 {
                     CancelSubmenuTimer();
+                    AltKeyState.NotePointerGesture();
                     OpenSubmenuNow(border, spec);
                 }
             };
@@ -317,14 +572,42 @@ public partial class VolumeMenuWindow : Window
         CancelSubmenuTimer();
         _pendingSubmenuRow = row;
         _pendingSubmenuSpec = spec;
-        _submenuTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(SubmenuDwellMs) };
+        _pendingCloseChild = false;
+        // Longer delay when switching away from an already-open submenu (diagonal travel).
+        var dwell = _child is { IsVisible: true } ? SubmenuSwitchDwellMs : SubmenuOpenDwellMs;
+        _submenuTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(dwell) };
         _submenuTimer.Tick += (_, _) =>
         {
             var pendingRow = _pendingSubmenuRow;
             var pendingSpec = _pendingSubmenuSpec;
             CancelSubmenuTimer();
-            if (pendingRow is not null && pendingSpec is not null)
+            // Still over the row? (avoids switching after a diagonal skim toward the open child)
+            if (pendingRow is not null && pendingSpec is not null && pendingRow.IsMouseOver)
                 OpenSubmenuNow(pendingRow, pendingSpec);
+        };
+        _submenuTimer.Start();
+    }
+
+    private void ScheduleCloseChild()
+    {
+        if (_child is not { IsVisible: true })
+        {
+            CloseChild();
+            return;
+        }
+
+        CancelSubmenuTimer();
+        _pendingCloseChild = true;
+        _submenuTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(SubmenuSwitchDwellMs) };
+        _submenuTimer.Tick += (_, _) =>
+        {
+            var shouldClose = _pendingCloseChild;
+            CancelSubmenuTimer();
+            if (!shouldClose) return;
+            // Diagonal move landed on the open child / parent — keep the submenu.
+            if (_child is { IsMouseOver: true }) return;
+            if (_openSubmenuRow is { IsMouseOver: true }) return;
+            CloseChild();
         };
         _submenuTimer.Start();
     }
@@ -335,23 +618,39 @@ public partial class VolumeMenuWindow : Window
         if (_openSubmenuRow == row && _child is { IsVisible: true })
             return;
 
-        CloseChild();
+        var previousParent = _openSubmenuRow;
+        // Close only the child window; keep highlight handling here.
+        CancelSubmenuTimer();
+        MenuSession.CloseChildrenOf(this);
+        _child = null;
+        _openSubmenuRow = null;
+        if (previousParent is not null && previousParent != row)
+            previousParent.Background = WpfBrushes.Transparent;
+
+        // Before ShowBeside Activate — keep Alt for hidden listing.
+        AltKeyState.Capture();
 
         var child = new VolumeMenuWindow();
         _child = child;
         _openSubmenuRow = row;
+        row.Background = HoverBrush;
         // Show loading placeholder immediately so the popup appears without waiting.
         child.SetItems([new MenuItemSpec { Title = L.Get("menu.directory_loading"), Enabled = false }]);
         child.ShowBeside(this, row);
+        if (AltKeyState.IsDown())
+            AltKeyState.Capture(true);
         spec.PopulateSubmenu(child);
     }
 
     private void CloseChild()
     {
         CancelSubmenuTimer();
+        var parentRow = _openSubmenuRow;
         MenuSession.CloseChildrenOf(this);
         _child = null;
         _openSubmenuRow = null;
+        if (parentRow is not null && !parentRow.IsMouseOver)
+            parentRow.Background = WpfBrushes.Transparent;
     }
 
     private void CancelSubmenuTimer()
@@ -360,42 +659,44 @@ public partial class VolumeMenuWindow : Window
         _submenuTimer = null;
         _pendingSubmenuRow = null;
         _pendingSubmenuSpec = null;
+        _pendingCloseChild = false;
     }
 
     private Border CreateSeparator()
     {
-        var dark = IsDarkTheme();
-        var line = dark ? WpfColor.FromRgb(0x4A, 0x4A, 0x4A) : WpfColor.FromRgb(0xE0, 0xE0, 0xE0);
+        var (_, border, _, _, _) = AppTheme.MenuColors();
         return new Border
         {
             Height = 1,
             Margin = new Thickness(10, 4, 10, 4),
-            Background = new SolidColorBrush(line)
+            Background = new SolidColorBrush(border)
         };
+    }
+
+    /// <summary>
+    /// Zero-height anchor so header actions sit above the parent row without a blank strip.
+    /// </summary>
+    private Border CreateAlignSpacer(MenuItemSpec spec)
+    {
+        var border = new Border
+        {
+            Height = 0,
+            Margin = new Thickness(0),
+            Background = WpfBrushes.Transparent,
+            IsHitTestVisible = false,
+            Tag = spec
+        };
+        if (spec.AlignBesideParent && _alignAnchorRow is null)
+            _alignAnchorRow = border;
+        return border;
     }
 
     private void ApplyTheme()
     {
-        var dark = IsDarkTheme();
-        var bg = dark ? WpfColor.FromRgb(0x2C, 0x2C, 0x2C) : WpfColor.FromRgb(0xF9, 0xF9, 0xF9);
-        var border = dark ? WpfColor.FromRgb(0x45, 0x45, 0x45) : WpfColor.FromRgb(0xE5, 0xE5, 0xE5);
+        _hoverBrush = null;
+        var (bg, border, _, _, _) = AppTheme.MenuColors();
         Chrome.Background = new SolidColorBrush(bg);
         Chrome.BorderBrush = new SolidColorBrush(border);
-    }
-
-    private void OnDeactivated(object? sender, EventArgs e)
-    {
-        if (!_canCloseOnDeactivate) return;
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (_closing) return;
-            if (MenuSession.IsPointerOverAny()) return;
-            var anyActive = System.Windows.Application.Current.Windows
-                .OfType<VolumeMenuWindow>()
-                .Any(w => w.IsActive);
-            if (anyActive) return;
-            MenuSession.CloseAll();
-        }, DispatcherPriority.Input);
     }
 
     protected override void OnKeyDown(System.Windows.Input.KeyEventArgs e)
@@ -408,18 +709,5 @@ public partial class VolumeMenuWindow : Window
             return;
         }
         base.OnKeyDown(e);
-    }
-
-    private static bool IsDarkTheme()
-    {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-            var value = key?.GetValue("SystemUsesLightTheme");
-            if (value is int i) return i == 0;
-        }
-        catch { /* ignore */ }
-        return false;
     }
 }

@@ -15,19 +15,22 @@
   <data name="menu.restart_format" xml:space="preserve"><value>{0} を再起動</value></data>
   <data name="menu.quit_format" xml:space="preserve"><value>{0} を終了</value></data>
   <data name="menu.no_volumes" xml:space="preserve"><value>ボリューム情報なし</value></data>
-  <data name="menu.trash" xml:space="preserve"><value>ゴミ箱</value></data>
-  <data name="menu.empty_trash" xml:space="preserve"><value>ゴミ箱を空にする</value></data>
+  <data name="menu.trash" xml:space="preserve"><value>ごみ箱</value></data>
+  <data name="menu.empty_trash" xml:space="preserve"><value>ごみ箱を空にする</value></data>
   <data name="menu.open_disk_utility" xml:space="preserve"><value>ディスクの管理を開く</value></data>
   <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
   <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} 項目</value></data>
   <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} 項目 - {1}</value></data>
+  <data name="menu.directory_summary_includes_hidden" xml:space="preserve"><value>（隠しファイルを含む）</value></data>
   <data name="menu.directory_empty" xml:space="preserve"><value>（空）</value></data>
   <data name="menu.directory_read_error" xml:space="preserve"><value>（読み込めません: {0}）</value></data>
   <data name="menu.add_to_favorites" xml:space="preserve"><value>お気に入りに追加</value></data>
   <data name="menu.remove_from_favorites" xml:space="preserve"><value>お気に入りから取り除く</value></data>
+  <data name="menu.show_on_top_bar" xml:space="preserve"><value>トップバーに表示</value></data>
+  <data name="menu.remove_from_top_bar" xml:space="preserve"><value>トップバーからはずす</value></data>
   <data name="menu.eject" xml:space="preserve"><value>取り出し</value></data>
   <data name="menu.about" xml:space="preserve"><value>Disk Monitorについて</value></data>
-  <data name="menu.send_feedback" xml:space="preserve"><value>フィードバックを送る...</value></data>
-  <data name="menu.check_for_updates" xml:space="preserve"><value>アップデートを確認...</value></data>
+  <data name="menu.send_feedback" xml:space="preserve"><value>評価とレビュー...</value></data>
   <data name="about.format" xml:space="preserve"><value>バージョン {0}</value></data>
+  <data name="alert.already_running_format" xml:space="preserve"><value>{0} はすでに起動しています。</value></data>
 </root>

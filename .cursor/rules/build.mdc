@@ -34,10 +34,12 @@ alwaysApply: true
 
 | コマンド | 内容 |
 |---|---|
-| `cd windows && powershell -ExecutionPolicy Bypass -File .\build.ps1` | self-contained EXE（x64 / arm64） |
-| `.\build.ps1 -Clean` | クリーン後ビルド |
+| `cd windows && powershell -ExecutionPolicy Bypass -File .\build.ps1` | **フルビルド**: EXE（x64/arm64）+ 署名済み `DiskMonitor.msixbundle` |
+| `.\build.ps1 -Exe` | EXE のみ（MSIX なし） |
+| `.\build.ps1 -Clean` | クリーン後フルビルド |
 | `.\build.ps1 -Noverup` | `windows/version.txt` の版上げスキップ |
 
+成果物: `windows/publish/exe/{x64,arm64}/`、`windows/publish/msix/DiskMonitor.msixbundle`  
 詳細: `windows/BUILD.md`
 
 ## 固有設定

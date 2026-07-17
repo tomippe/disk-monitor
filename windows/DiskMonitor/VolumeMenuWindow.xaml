@@ -11,8 +11,7 @@
         SnapsToDevicePixels="True"
         UseLayoutRounding="True"
         FontFamily="Segoe UI Variable Text, Segoe UI"
-        FontSize="13"
-        Deactivated="OnDeactivated">
+        FontSize="13">
     <Border x:Name="Chrome"
             CornerRadius="8"
             BorderThickness="1"

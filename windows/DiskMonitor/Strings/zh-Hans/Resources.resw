@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <data name="AppDisplayName" xml:space="preserve">
+    <value>Disk Monitor</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>在屏幕底部 AppBar 显示磁盘可用空间。</value>
+  </data>
+</root>
