@@ -24,10 +24,42 @@ public static class DirectoryService
         CancellationToken cancellationToken = default) =>
         Task.Run(() => List(directoryPath, includeHidden, cancellationToken), cancellationToken);
 
+    private static readonly TimeSpan NetworkListTimeout = TimeSpan.FromSeconds(8);
+
     public static DirectorySnapshot List(
         string directoryPath,
         bool includeHidden = false,
         CancellationToken cancellationToken = default)
+    {
+        // Network Exists/Enumerate can hang ~30s — bound the wait so the menu can recover.
+        if (VolumeService.IsNetworkPath(directoryPath))
+        {
+            try
+            {
+                var work = Task.Run(
+                    () => ListCore(directoryPath, includeHidden, cancellationToken),
+                    cancellationToken);
+                if (work.Wait(NetworkListTimeout, cancellationToken))
+                    return work.Result;
+                return new DirectorySnapshot([], 0, "timeout");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DirectorySnapshot([], 0, ex.Message);
+            }
+        }
+
+        return ListCore(directoryPath, includeHidden, cancellationToken);
+    }
+
+    private static DirectorySnapshot ListCore(
+        string directoryPath,
+        bool includeHidden,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -70,14 +102,17 @@ public static class DirectoryService
                 return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
             });
 
-            // Probe dirs only (files stay accessible) — keeps listing responsive on huge folders.
-            for (var i = 0; i < entries.Count; i++)
+            // Probe dirs only (files stay accessible). Skip on network — each probe can stall.
+            if (!VolumeService.IsNetworkPath(directoryPath))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var e = entries[i];
-                if (!e.IsDirectory) continue;
-                if (!IsEntryAccessible(e.Path, isDirectory: true))
-                    entries[i] = e with { IsAccessible = false };
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var e = entries[i];
+                    if (!e.IsDirectory) continue;
+                    if (!IsEntryAccessible(e.Path, isDirectory: true))
+                        entries[i] = e with { IsAccessible = false };
+                }
             }
 
             return new DirectorySnapshot(entries, entries.Count, null);

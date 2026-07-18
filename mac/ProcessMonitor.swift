@@ -1869,6 +1869,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func formatBytes(_ bytes: Int64, concise: Bool) -> String {
+        if concise {
+            return formatBytesCompact(bytes)
+        }
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB, .useTB, .usePB]
         formatter.countStyle = .file
@@ -1876,10 +1879,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         formatter.isAdaptive = true
         formatter.zeroPadsFractionDigits = false
         formatter.includesCount = true
-        if concise {
-            formatter.allowsNonnumericFormatting = false
-        }
         return formatter.string(fromByteCount: bytes)
+    }
+
+    /// コンパクト表記（Windows と同じ）: "15.2GB"
+    private func formatBytesCompact(_ bytes: Int64) -> String {
+        var value = Double(bytes)
+        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+        var unit = 0
+        while value >= 1024, unit < units.count - 1 {
+            value /= 1024
+            unit += 1
+        }
+        let number: String
+        if unit <= 1 {
+            number = String(Int64(value))
+        } else if value >= 100 {
+            number = String(format: "%.0f", value)
+        } else if value >= 10 {
+            number = Self.trimTrailingZeros(String(format: "%.1f", value))
+        } else {
+            number = Self.trimTrailingZeros(String(format: "%.2f", value))
+        }
+        return "\(number)\(units[unit])"
+    }
+
+    private static func trimTrailingZeros(_ formatted: String) -> String {
+        guard formatted.contains(".") else { return formatted }
+        var s = formatted
+        while s.last == "0" { s.removeLast() }
+        if s.last == "." { s.removeLast() }
+        return s
     }
 
     private static let diskUtilityBundleID = "com.apple.DiskUtility"
@@ -1970,8 +2000,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func copyStatus() {
+        // メニューと同じ順で「ボリューム名 xxx.xGB」を改行区切り
+        let text = volumeRows.map { row in
+            "\(row.name) \(formatBytesCompact(displayedAvailableBytes(for: row)))"
+        }.joined(separator: "\n")
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(statusText, forType: .string)
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc private func refreshNow() {

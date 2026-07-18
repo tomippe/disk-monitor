@@ -10,7 +10,69 @@ public static class FavoriteStore
         "DiskMonitor",
         "favorites.json");
 
+    private static readonly object Gate = new();
+    private static List<string>? _cache;
+
     public static IReadOnlyList<string> LoadPaths()
+    {
+        lock (Gate)
+        {
+            if (_cache is not null)
+                return _cache;
+            _cache = ReadFromDisk();
+            return _cache;
+        }
+    }
+
+    public static bool Contains(string path)
+    {
+        lock (Gate)
+        {
+            _cache ??= ReadFromDisk();
+            return _cache.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public static bool IsAvailable(string path)
+    {
+        // Directory.Exists on mapped / UNC paths can stall for tens of seconds.
+        if (VolumeService.IsNetworkPath(path))
+            return true;
+        try
+        {
+            return Directory.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static void Add(string path)
+    {
+        lock (Gate)
+        {
+            _cache ??= ReadFromDisk();
+            if (_cache.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
+                return;
+            _cache.Add(path);
+            Save_NoLock(_cache);
+        }
+    }
+
+    public static void Remove(string path)
+    {
+        lock (Gate)
+        {
+            _cache ??= ReadFromDisk();
+            _cache = _cache
+                .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Save_NoLock(_cache);
+        }
+    }
+
+    private static List<string> ReadFromDisk()
     {
         try
         {
@@ -26,29 +88,7 @@ public static class FavoriteStore
         }
     }
 
-    public static bool Contains(string path) =>
-        LoadPaths().Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
-
-    public static bool IsAvailable(string path) => Directory.Exists(path);
-
-    public static void Add(string path)
-    {
-        var paths = LoadPaths().ToList();
-        if (paths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
-            return;
-        paths.Add(path);
-        Save(paths);
-    }
-
-    public static void Remove(string path)
-    {
-        var paths = LoadPaths()
-            .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        Save(paths);
-    }
-
-    private static void Save(List<string> paths)
+    private static void Save_NoLock(List<string> paths)
     {
         var dir = Path.GetDirectoryName(FilePath);
         if (!string.IsNullOrEmpty(dir))

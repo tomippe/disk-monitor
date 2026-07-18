@@ -80,8 +80,44 @@ public static class ShellVolumeHelper
         return name;
     }
 
-    /// <summary>Drop cached Explorer names so the next lookup sees renames / formats.</summary>
-    public static void InvalidateMenuDisplayNames() => MenuDisplayNameCache.Clear();
+    /// <summary>
+    /// Drop cached Explorer names so renames / formats show up.
+    /// Network roots can be preserved — SHGetFileInfo on mapped drives often stalls for seconds.
+    /// </summary>
+    public static void InvalidateMenuDisplayNames(IEnumerable<string>? preserveRoots = null)
+    {
+        if (preserveRoots is null)
+        {
+            MenuDisplayNameCache.Clear();
+            return;
+        }
+
+        var keep = new HashSet<string>(
+            preserveRoots.Select(NormalizeRoot),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var key in MenuDisplayNameCache.Keys.ToList())
+        {
+            if (!keep.Contains(key))
+                MenuDisplayNameCache.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>
+    /// Network-safe label: use cache when present; optional one-time fetch for first sighting.
+    /// </summary>
+    public static string GetMenuDisplayNameCachedOrFetch(string rootPath, bool allowFetch)
+    {
+        var key = NormalizeRoot(rootPath);
+        if (MenuDisplayNameCache.TryGetValue(key, out var cached))
+            return cached;
+        if (!allowFetch)
+        {
+            var letter = Path.GetPathRoot(rootPath)?.TrimEnd('\\');
+            return !string.IsNullOrEmpty(letter) ? $"{letter})" : key;
+        }
+
+        return GetMenuDisplayName(rootPath);
+    }
 
     public static ImageSource? GetDriveIcon(string rootPath, int dipSize = 20) =>
         GetPathIcon(NormalizeRoot(rootPath), dipSize);

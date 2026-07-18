@@ -87,6 +87,8 @@ public static class MenuActions
             {
                 foreach (var drive in DriveInfo.GetDrives())
                 {
+                    // IsReady on mapped network drives can stall for tens of seconds.
+                    if (drive.DriveType == DriveType.Network) continue;
                     if (!drive.IsReady) continue;
                     info = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
                     if (SHQueryRecycleBin(drive.Name, ref info) == 0)

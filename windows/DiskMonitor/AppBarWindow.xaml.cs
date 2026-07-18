@@ -143,8 +143,9 @@ public partial class AppBarWindow : Window
             try
             {
                 _ = MenuActions.RecycleBinBytes(); // refresh cache off-UI
-                // Re-query Explorer display names — volume labels change after format / rename.
-                ShellVolumeHelper.InvalidateMenuDisplayNames();
+                // Refresh volume cache off-UI. Local labels re-queried; network names kept
+                // (SHGetFileInfo / IsReady on mapped drives stall for seconds).
+                VolumeService.RefreshVolumes();
                 var system = VolumeService.SystemVolume();
                 if (system is null)
                     status = L.Get("app.name");
@@ -192,7 +193,9 @@ public partial class AppBarWindow : Window
         {
             if (a[i].IsSeparator != b[i].IsSeparator) return false;
             if (a[i].IsSeparator) continue;
-            if (!string.Equals(a[i].Title, b[i].Title, StringComparison.Ordinal)
+            if (a[i].Enabled != b[i].Enabled
+                || a[i].Muted != b[i].Muted
+                || !string.Equals(a[i].Title, b[i].Title, StringComparison.Ordinal)
                 || !string.Equals(a[i].IconPath, b[i].IconPath, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(a[i].TrailingTag, b[i].TrailingTag, StringComparison.Ordinal))
                 return false;
@@ -559,7 +562,8 @@ public partial class AppBarWindow : Window
         {
             if (spec.IsSeparator || chip.Tag is not ChipTag tag) continue;
 
-            if (!string.IsNullOrEmpty(spec.IconPath) && tag.Icon is not null)
+            if (!string.IsNullOrEmpty(spec.IconPath) && tag.Icon is not null
+                && !VolumeService.IsNetworkPath(spec.IconPath))
             {
                 var path = spec.IconPath;
                 var img = tag.Icon;
@@ -590,6 +594,9 @@ public partial class AppBarWindow : Window
                 if (trailingTag.StartsWith("favsize:", StringComparison.Ordinal))
                 {
                     var path = trailingTag["favsize:".Length..];
+                    // du over a network share stalls for a long time — skip.
+                    if (VolumeService.IsNetworkPath(path))
+                        continue;
                     _ = Task.Run(async () =>
                     {
                         var bytes = await DirectoryService.GetFolderSizeAsync(path, TimeSpan.FromSeconds(8))
@@ -662,8 +669,7 @@ public partial class AppBarWindow : Window
         var items = MenuBuilder.BuildOverflowAndMore(
             _overflowItems,
             refresh: () => RefreshStatus(),
-            quit: () => System.Windows.Application.Current.Shutdown(),
-            statusText: () => _statusForCopy);
+            quit: () => System.Windows.Application.Current.Shutdown());
         menu.SetItems(items);
         menu.ShowAbove(MoreChip);
         MenuBuilder.ScheduleRootAsync(menu, items);

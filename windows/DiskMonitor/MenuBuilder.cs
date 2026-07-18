@@ -51,10 +51,7 @@ internal static class MenuBuilder
         return items;
     }
 
-    public static IReadOnlyList<MenuItemSpec> BuildRoot(
-        Action refresh,
-        Action quit,
-        Func<string> statusText)
+    public static IReadOnlyList<MenuItemSpec> BuildRoot(Action refresh, Action quit)
     {
         var items = new List<MenuItemSpec>();
         var volumes = VolumeService.ListVolumes();
@@ -86,7 +83,7 @@ internal static class MenuBuilder
             Glyph = AppGlyph.More,
             Title = L.Get("menu.more"),
             HasSubmenu = true,
-            PopulateSubmenu = child => child.SetItems(BuildMoreItems(refresh, quit, statusText))
+            PopulateSubmenu = child => child.SetItems(BuildMoreItems(refresh, quit))
         });
 
         return items;
@@ -96,8 +93,7 @@ internal static class MenuBuilder
     public static IReadOnlyList<MenuItemSpec> BuildOverflowAndMore(
         IReadOnlyList<MenuItemSpec> layoutOverflow,
         Action refresh,
-        Action quit,
-        Func<string> statusText)
+        Action quit)
     {
         var items = new List<MenuItemSpec>();
 
@@ -113,7 +109,7 @@ internal static class MenuBuilder
             items.Add(CreateTrashItem());
         }
 
-        var more = BuildMoreItems(refresh, quit, statusText);
+        var more = BuildMoreItems(refresh, quit);
         // Horizontal separator between top-bar overflow section and 「その他」.
         if (items.Count > 0 && more.Count > 0 && !items[^1].IsSeparator)
             items.Add(Sep());
@@ -131,16 +127,23 @@ internal static class MenuBuilder
         var free = vol.AvailableBytes is long bytes
             ? VolumeService.FormatBytes(bytes, concise: true)
             : null;
+        // Empty DVD / unreadable volume: gray parent; submenu stays for top-bar / eject.
+        var ready = vol.IsReady;
+        var network = vol.DriveType == IODriveType.Network;
         return new MenuItemSpec
         {
             Glyph = AppGlyph.Disk,
-            IconPath = path,
+            // Network shell icons stall the STA loader — keep the glyph only.
+            IconPath = network ? null : path,
             Title = vol.Name,
             Trailing = free,
-            Enabled = true,
+            Enabled = ready,
+            Muted = !ready,
             HasSubmenu = true,
-            OnClick = () => MenuActions.OpenPath(path),
-            PopulateSubmenu = child => PopulateDirectory(child, path, volumeRoot: path, isFavoriteRoot: false)
+            OnClick = ready ? () => MenuActions.OpenPath(path) : null,
+            // Capture VolumeInfo so opening the submenu never re-enumerates drives on the UI thread.
+            PopulateSubmenu = child => PopulateDirectory(
+                child, path, volumeRoot: path, isFavoriteRoot: false, volume: vol)
         };
     }
 
@@ -148,11 +151,13 @@ internal static class MenuBuilder
     {
         var available = FavoriteStore.IsAvailable(fav);
         var name = Path.GetFileName(fav.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : fav;
+        var network = VolumeService.IsNetworkPath(fav);
         return new MenuItemSpec
         {
             Glyph = AppGlyph.Folder,
-            IconPath = available ? fav : null,
-            Title = DisplayName(name, isDirectory: Directory.Exists(fav)),
+            // Skip shell icons for network favorites — STA SHGetFileInfo stalls hard.
+            IconPath = available && !network ? fav : null,
+            Title = DisplayName(name, isDirectory: true),
             Enabled = available,
             TrailingItalic = true,
             TrailingTag = available ? "favsize:" + fav : null,
@@ -218,10 +223,7 @@ internal static class MenuBuilder
         };
     }
 
-    public static IReadOnlyList<MenuItemSpec> BuildMoreItems(
-        Action refresh,
-        Action quit,
-        Func<string> statusText)
+    public static IReadOnlyList<MenuItemSpec> BuildMoreItems(Action refresh, Action quit)
     {
         var loginOn = MenuActions.IsOpenAtLogin();
         return
@@ -231,7 +233,7 @@ internal static class MenuBuilder
                 Glyph = AppGlyph.Copy,
                 Title = L.Get("menu.copy_status"),
                 AlignBesideParent = true,
-                OnClick = () => MenuActions.CopyText(statusText())
+                OnClick = () => MenuActions.CopyText(VolumeService.FormatAllVolumesStatus())
             },
             new MenuItemSpec
             {
@@ -309,62 +311,79 @@ internal static class MenuBuilder
         VolumeMenuWindow menu,
         string directoryPath,
         string? volumeRoot,
-        bool isFavoriteRoot)
+        bool isFavoriteRoot,
+        VolumeInfo? volume = null)
     {
         var generation = menu.BeginLoad();
         var token = menu.LoadToken;
         var includeHidden = AltKeyState.TakeCapturedOrRead();
 
+        // Prefer the snapshot captured when the chip/row was built (no DriveInfo on UI).
+        volume ??= volumeRoot is not null ? VolumeService.TryGetCachedVolume(volumeRoot) : null;
+
         menu.BindDirectoryRelist(
             includeHidden,
-            () => PopulateDirectory(menu, directoryPath, volumeRoot, isFavoriteRoot));
+            () => PopulateDirectory(menu, directoryPath, volumeRoot, isFavoriteRoot, volume));
 
-        // Mac: show summary / top-bar / eject headers before the listing arrives.
-        menu.SetItems(BuildDirectoryLoadingItems(directoryPath, volumeRoot, isFavoriteRoot));
+        // Empty DVD / media not ready — skip listing; keep top-bar / eject only.
+        if (volumeRoot is not null
+            && volume is { IsReady: false }
+            && IsSameDirectoryPath(directoryPath, volumeRoot))
+        {
+            menu.SetItems(BuildDirectoryActionsOnly(directoryPath, volumeRoot, isFavoriteRoot, volume));
+            return;
+        }
 
-        // Listing on a background thread — switching folders cancels via generation/token.
-        _ = Task.Run(async () =>
+        // Gray "読み込み中…" + top-bar / eject — must stay cheap (no DriveInfo / SHGetFileInfo).
+        menu.SetItems(BuildDirectoryLoadingItems(directoryPath, volumeRoot, isFavoriteRoot, volume));
+
+        // List + build MenuItemSpec off the UI thread — switching folders cancels via generation/token.
+        _ = Task.Run(() =>
         {
             DirectorySnapshot snap;
             try
             {
-                snap = await DirectoryService.ListAsync(directoryPath, includeHidden, token)
-                    .ConfigureAwait(false);
+                snap = DirectoryService.List(directoryPath, includeHidden, token);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
 
-            await menu.Dispatcher.InvokeAsync(() =>
+            if (token.IsCancellationRequested) return;
+
+            var items = BuildDirectoryItems(
+                snap, directoryPath, volumeRoot, isFavoriteRoot, includeHidden, volume, out var summaryTag);
+
+            menu.Dispatcher.BeginInvoke(() =>
             {
                 if (!menu.IsLoadCurrent(generation)) return;
 
-                var items = BuildDirectoryItems(
-                    snap, directoryPath, volumeRoot, isFavoriteRoot, includeHidden, out var summaryTag);
                 menu.SetItems(items);
 
                 ScheduleEntryIcons(menu, generation, items);
 
                 if (snap.Error is null && summaryTag is not null)
                     ScheduleFolderSize(menu, generation, directoryPath, snap.TotalCount, includeHidden, summaryTag);
-            });
+            }, System.Windows.Threading.DispatcherPriority.Background);
         }, token);
     }
 
     /// <summary>
     /// Header rows shown while the directory listing is still loading
-    /// (summary placeholder, top-bar / favorite toggle, eject).
+    /// (muted summary placeholder, top-bar / favorite toggle, eject).
     /// </summary>
     private static List<MenuItemSpec> BuildDirectoryLoadingItems(
         string directoryPath,
         string? volumeRoot,
-        bool isFavoriteRoot)
+        bool isFavoriteRoot,
+        VolumeInfo? volume)
     {
         var items = BuildDirectoryHeaderItems(
             directoryPath,
             volumeRoot,
             isFavoriteRoot,
+            volume,
             summaryTitle: L.Get("menu.directory_loading"),
             summaryEnabled: false,
             summaryOnClick: null,
@@ -381,12 +400,39 @@ internal static class MenuBuilder
     }
 
     /// <summary>
+    /// Unreadable folder / empty media: top-bar / favorite / eject only (no summary, no error row).
+    /// </summary>
+    private static List<MenuItemSpec> BuildDirectoryActionsOnly(
+        string directoryPath,
+        string? volumeRoot,
+        bool isFavoriteRoot,
+        VolumeInfo? volume)
+    {
+        var items = BuildDirectoryActionItems(
+            directoryPath, volumeRoot, isFavoriteRoot, volume, includeEject: true);
+        if (items.Count > 0)
+        {
+            items[0].AlignBesideParent = true;
+            return items;
+        }
+
+        items.Add(new MenuItemSpec
+        {
+            IsAlignSpacer = true,
+            AlignBesideParent = true,
+            Enabled = false
+        });
+        return items;
+    }
+
+    /// <summary>
     /// Summary + favorite / top-bar toggles + optional eject — shared by loading and loaded menus.
     /// </summary>
     private static List<MenuItemSpec> BuildDirectoryHeaderItems(
         string directoryPath,
         string? volumeRoot,
         bool isFavoriteRoot,
+        VolumeInfo? volume,
         string summaryTitle,
         bool summaryEnabled,
         Action? summaryOnClick,
@@ -400,9 +446,24 @@ internal static class MenuBuilder
                 Tag = summaryTag,
                 Title = summaryTitle,
                 Enabled = summaryEnabled,
+                Muted = !summaryEnabled,
                 OnClick = summaryOnClick
             }
         };
+        items.AddRange(BuildDirectoryActionItems(
+            directoryPath, volumeRoot, isFavoriteRoot, volume, includeEject));
+        return items;
+    }
+
+    /// <summary>Top-bar / favorite / eject — independent of directory listing success.</summary>
+    private static List<MenuItemSpec> BuildDirectoryActionItems(
+        string directoryPath,
+        string? volumeRoot,
+        bool isFavoriteRoot,
+        VolumeInfo? volume,
+        bool includeEject)
+    {
+        var items = new List<MenuItemSpec>();
 
         if (isFavoriteRoot)
             items.Add(RemoveFavoriteItem(directoryPath));
@@ -410,21 +471,19 @@ internal static class MenuBuilder
             items.Add(AddFavoriteItem(directoryPath));
 
         var driveRoot = volumeRoot is not null && IsSameDirectoryPath(directoryPath, volumeRoot);
-        VolumeInfo? vol = null;
-        if (driveRoot)
-        {
-            vol = VolumeService.ListVolumes().FirstOrDefault(v =>
-                string.Equals(v.RootPath, volumeRoot, StringComparison.OrdinalIgnoreCase));
-            if (vol is not null)
-                items.Add(CreateTopBarToggleItem(vol));
-        }
+        var vol = driveRoot ? volume : null;
+        if (vol is not null)
+            items.Add(CreateTopBarToggleItem(vol));
 
-        items.Add(Sep());
+        // Empty DVD / no media: Eject is not available — omit the row entirely.
+        var canEject = includeEject
+            && vol is { IsReady: true }
+            && vol.DriveType is IODriveType.Removable or IODriveType.CDRom;
 
-        if (includeEject
-            && vol is not null
-            && vol.DriveType is IODriveType.Removable or IODriveType.CDRom)
+        if (canEject)
         {
+            if (items.Count > 0)
+                items.Add(Sep());
             var root = volumeRoot!;
             items.Add(new MenuItemSpec
             {
@@ -436,17 +495,44 @@ internal static class MenuBuilder
                     MenuSession.CloseAll();
                 }
             });
-            items.Add(Sep());
         }
 
+        // Never leave a trailing separator (caller adds one before listing content if needed).
+        TrimTrailingSeparators(items);
         return items;
     }
 
-    private static bool IsSameDirectoryPath(string a, string b) =>
-        string.Equals(
-            Path.GetFullPath(a).TrimEnd('\\'),
-            Path.GetFullPath(b).TrimEnd('\\'),
-            StringComparison.OrdinalIgnoreCase);
+    private static void TrimTrailingSeparators(List<MenuItemSpec> items)
+    {
+        while (items.Count > 0 && items[^1].IsSeparator)
+            items.RemoveAt(items.Count - 1);
+    }
+
+    /// <summary>Insert a separator before folder listing rows when the header does not already end with one.</summary>
+    private static void EnsureSeparatorBeforeContent(List<MenuItemSpec> items)
+    {
+        if (items.Count == 0 || items[^1].IsSeparator) return;
+        items.Add(Sep());
+    }
+
+    /// <summary>Compare paths without GetFullPath when possible (GetFullPath can hit slow volumes).</summary>
+    private static bool IsSameDirectoryPath(string a, string b)
+    {
+        static string Norm(string p) => p.TrimEnd('\\', '/');
+        if (string.Equals(Norm(a), Norm(b), StringComparison.OrdinalIgnoreCase))
+            return true;
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd('\\'),
+                Path.GetFullPath(b).TrimEnd('\\'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static List<MenuItemSpec> BuildDirectoryItems(
         DirectorySnapshot snap,
@@ -454,37 +540,32 @@ internal static class MenuBuilder
         string? volumeRoot,
         bool isFavoriteRoot,
         bool includeHidden,
+        VolumeInfo? volume,
         out string? summaryTag)
     {
-        // Mac keeps summary + favorite actions even when the folder itself can't be listed.
+        summaryTag = null;
+
+        // Unreadable — actions only (top-bar / favorite / eject). No "0 items" / error row.
+        if (snap.Error is not null)
+            return BuildDirectoryActionsOnly(directoryPath, volumeRoot, isFavoriteRoot, volume);
+
         summaryTag = "summary:" + directoryPath;
-        var summaryTitle = string.Format(
-            L.Get("menu.directory_summary_items"),
-            snap.Error is null ? snap.TotalCount : 0);
-        if (includeHidden && snap.Error is null)
+        var summaryTitle = string.Format(L.Get("menu.directory_summary_items"), snap.TotalCount);
+        if (includeHidden)
             summaryTitle += L.Get("menu.directory_summary_includes_hidden");
 
         var items = BuildDirectoryHeaderItems(
             directoryPath,
             volumeRoot,
             isFavoriteRoot,
+            volume,
             summaryTitle,
-            summaryEnabled: snap.Error is null,
-            summaryOnClick: snap.Error is null ? () => MenuActions.OpenPath(directoryPath) : null,
+            summaryEnabled: true,
+            summaryOnClick: () => MenuActions.OpenPath(directoryPath),
             summaryTag,
-            includeEject: snap.Error is null);
+            includeEject: true);
 
-        if (snap.Error is not null)
-        {
-            items.Add(new MenuItemSpec
-            {
-                Title = string.Format(L.Get("menu.directory_read_error"), snap.Error),
-                Enabled = false,
-                AlignBesideParent = true
-            });
-            summaryTag = null;
-            return items;
-        }
+        EnsureSeparatorBeforeContent(items);
 
         if (snap.Entries.Count == 0)
         {
@@ -492,6 +573,7 @@ internal static class MenuBuilder
             {
                 Title = L.Get("menu.directory_empty"),
                 Enabled = false,
+                Muted = true,
                 AlignBesideParent = true
             });
             return items;
@@ -517,7 +599,7 @@ internal static class MenuBuilder
                     IconPath = path,
                     Title = DisplayName(entry.Name, isDirectory: true),
                     Enabled = false,
-                    Muted = entry.IsHidden,
+                    Muted = true,
                     AlignBesideParent = align,
                     HasSubmenu = showAdd,
                     PopulateSubmenu = showAdd
@@ -640,8 +722,9 @@ internal static class MenuBuilder
         IReadOnlyList<MenuItemSpec> items,
         CancellationToken token)
     {
+        // Shell icons for network paths block the STA icon thread (and feel like UI hitches).
         var paths = items
-            .Where(i => !string.IsNullOrEmpty(i.IconPath))
+            .Where(i => !string.IsNullOrEmpty(i.IconPath) && !VolumeService.IsNetworkPath(i.IconPath!))
             .Select(i => i.IconPath!)
             .ToList();
         if (paths.Count == 0) return;
@@ -725,6 +808,10 @@ internal static class MenuBuilder
         bool includeHidden,
         string summaryTag)
     {
+        // Walking a network share for size freezes the process for a long time — skip.
+        if (VolumeService.IsNetworkPath(directoryPath))
+            return;
+
         var token = menu.LoadToken;
         _ = Task.Run(async () =>
         {

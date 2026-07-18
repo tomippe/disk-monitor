@@ -25,9 +25,12 @@ public static class TopBarStore
 
     public static bool IsDefaultOnTopBar(VolumeInfo vol)
     {
-        var system = VolumeService.SystemVolume();
-        if (system is not null
-            && string.Equals(vol.RootPath, system.RootPath, StringComparison.OrdinalIgnoreCase))
+        // Avoid ListVolumes / DriveInfo here — this runs when opening submenus on the UI thread.
+        var systemRoot = VolumeService.SystemRootPath();
+        if (string.Equals(
+                vol.RootPath.TrimEnd('\\', '/'),
+                systemRoot,
+                StringComparison.OrdinalIgnoreCase))
             return true;
 
         return vol.DriveType is IODriveType.Removable or IODriveType.CDRom;
@@ -140,9 +143,10 @@ public static class TopBarStore
 
     private static string Normalize(string rootPath)
     {
+        // Do not use Path.GetFullPath — it can stall on network / offline mapped drives.
         if (string.IsNullOrWhiteSpace(rootPath)) return "";
-        var full = Path.GetFullPath(rootPath);
-        return full.EndsWith('\\') ? full : full + "\\";
+        var trimmed = rootPath.Trim().Replace('/', '\\');
+        return trimmed.EndsWith('\\') ? trimmed : trimmed + "\\";
     }
 
     private sealed class TopBarData
