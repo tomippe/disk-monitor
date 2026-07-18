@@ -43,6 +43,8 @@ public static class ShellVolumeHelper
     /// <summary>
     /// Menu label: "C:) ローカルディスク" (drive letter first, no opening parenthesis).
     /// Cached — SHGetFileInfo on the UI thread causes hitching.
+    /// Call <see cref="InvalidateMenuDisplayNames"/> on each status refresh so format /
+    /// volume-label changes show up (otherwise the first name sticks forever).
     /// </summary>
     public static string GetMenuDisplayName(string rootPath)
     {
@@ -77,6 +79,9 @@ public static class ShellVolumeHelper
         MenuDisplayNameCache[key] = name;
         return name;
     }
+
+    /// <summary>Drop cached Explorer names so the next lookup sees renames / formats.</summary>
+    public static void InvalidateMenuDisplayNames() => MenuDisplayNameCache.Clear();
 
     public static ImageSource? GetDriveIcon(string rootPath, int dipSize = 20) =>
         GetPathIcon(NormalizeRoot(rootPath), dipSize);

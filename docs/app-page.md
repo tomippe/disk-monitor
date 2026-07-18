@@ -23,11 +23,12 @@
 
 ## プラットフォーム
 
-- **platform**: ["mac"]（Windows 版は `windows/` 開発中。公開時に `win` を追加）
-- **app-macdesc**: macOS 11+, ZIP<br>日本語,English,中文
+- **platform**: ["mac", "win"]
+- **app-macdesc**: macOS 11+, DMG<br>日本語,English,中文
+- **app-winurl**: https://apps.microsoft.com/detail/9P47CBVHQ797?hl=ja-JP&gl=JP
+- **app-windesc**: Windows 10+, Store<br>日本語,English,中文
 
 MAS 公開後は **app-iosurl**（Mac App Store の URL）と **app-macdesc**（`macOS 11+, App Store<br>日本語,English,中文` 形式）を更新すること。
-Windows 公開時は **app-winurl** / **app-windesc** を設定すること。
 
 ## メディア（WordPress）
 
@@ -47,14 +48,16 @@ Windows 公開時は **app-winurl** / **app-windesc** を設定すること。
 
 紹介ページ本文は WordPress（投稿 ID 2274）で設定済み。要点:
 
-- メニューバーにシステムボリュームの空き表示、ボリューム一覧・取り出し、ゴミ箱・ディスクユーティリティ
+- Mac はメニューバー、Windows はタスクバー直上の帯に空き容量を表示
+- ボリューム一覧・取り出し、ゴミ箱、ディスクユーティリティ（Mac）
 - ローカル情報のみ・外部送信なし
-- **多言語 UI**（日本語・English・简体中文、macOS の表示言語に追従）
+- **多言語 UI**（日本語・English・简体中文、OS の表示言語に追従）
 
 ## バージョン履歴（app-versions）
 
 **アプリ本体のリリース履歴のみ**（紹介ページ・KV・スクショの変更は書かない）。**初回だけ**必ず 1 行入れる（例: 初版リリース）。それ以降はユーザーから指示があったときだけ行を追加する。
 
+- 2026.07.18 / v1.1.9 / Windows 版を Microsoft Store で公開しました。
 - 2026.05.12 / v1.0.4 / 初版リリース
 
 ## ローカル連携

@@ -7,7 +7,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>DiskMonitor</RootNamespace>
     <AssemblyName>DiskMonitor</AssemblyName>
-    <Version>1.0.4</Version>
+    <Version>1.0.6</Version>
     <Authors>tomippe</Authors>
     <Description>Shows free disk space on a bottom AppBar.</Description>
     <Nullable>enable</Nullable>

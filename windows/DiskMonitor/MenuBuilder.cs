@@ -319,6 +319,9 @@ internal static class MenuBuilder
             includeHidden,
             () => PopulateDirectory(menu, directoryPath, volumeRoot, isFavoriteRoot));
 
+        // Mac: show summary / top-bar / eject headers before the listing arrives.
+        menu.SetItems(BuildDirectoryLoadingItems(directoryPath, volumeRoot, isFavoriteRoot));
+
         // Listing on a background thread — switching folders cancels via generation/token.
         _ = Task.Run(async () =>
         {
@@ -349,6 +352,102 @@ internal static class MenuBuilder
         }, token);
     }
 
+    /// <summary>
+    /// Header rows shown while the directory listing is still loading
+    /// (summary placeholder, top-bar / favorite toggle, eject).
+    /// </summary>
+    private static List<MenuItemSpec> BuildDirectoryLoadingItems(
+        string directoryPath,
+        string? volumeRoot,
+        bool isFavoriteRoot)
+    {
+        var items = BuildDirectoryHeaderItems(
+            directoryPath,
+            volumeRoot,
+            isFavoriteRoot,
+            summaryTitle: L.Get("menu.directory_loading"),
+            summaryEnabled: false,
+            summaryOnClick: null,
+            summaryTag: null,
+            includeEject: true);
+        // Keep header actions above the parent row while the listing is empty.
+        items.Add(new MenuItemSpec
+        {
+            IsAlignSpacer = true,
+            AlignBesideParent = true,
+            Enabled = false
+        });
+        return items;
+    }
+
+    /// <summary>
+    /// Summary + favorite / top-bar toggles + optional eject — shared by loading and loaded menus.
+    /// </summary>
+    private static List<MenuItemSpec> BuildDirectoryHeaderItems(
+        string directoryPath,
+        string? volumeRoot,
+        bool isFavoriteRoot,
+        string summaryTitle,
+        bool summaryEnabled,
+        Action? summaryOnClick,
+        string? summaryTag,
+        bool includeEject)
+    {
+        var items = new List<MenuItemSpec>
+        {
+            new()
+            {
+                Tag = summaryTag,
+                Title = summaryTitle,
+                Enabled = summaryEnabled,
+                OnClick = summaryOnClick
+            }
+        };
+
+        if (isFavoriteRoot)
+            items.Add(RemoveFavoriteItem(directoryPath));
+        else if (volumeRoot is null && !FavoriteStore.Contains(directoryPath))
+            items.Add(AddFavoriteItem(directoryPath));
+
+        var driveRoot = volumeRoot is not null && IsSameDirectoryPath(directoryPath, volumeRoot);
+        VolumeInfo? vol = null;
+        if (driveRoot)
+        {
+            vol = VolumeService.ListVolumes().FirstOrDefault(v =>
+                string.Equals(v.RootPath, volumeRoot, StringComparison.OrdinalIgnoreCase));
+            if (vol is not null)
+                items.Add(CreateTopBarToggleItem(vol));
+        }
+
+        items.Add(Sep());
+
+        if (includeEject
+            && vol is not null
+            && vol.DriveType is IODriveType.Removable or IODriveType.CDRom)
+        {
+            var root = volumeRoot!;
+            items.Add(new MenuItemSpec
+            {
+                Glyph = AppGlyph.Eject,
+                Title = L.Get("menu.eject"),
+                OnClick = () =>
+                {
+                    MenuActions.EjectDrive(root);
+                    MenuSession.CloseAll();
+                }
+            });
+            items.Add(Sep());
+        }
+
+        return items;
+    }
+
+    private static bool IsSameDirectoryPath(string a, string b) =>
+        string.Equals(
+            Path.GetFullPath(a).TrimEnd('\\'),
+            Path.GetFullPath(b).TrimEnd('\\'),
+            StringComparison.OrdinalIgnoreCase);
+
     private static List<MenuItemSpec> BuildDirectoryItems(
         DirectorySnapshot snap,
         string directoryPath,
@@ -357,9 +456,6 @@ internal static class MenuBuilder
         bool includeHidden,
         out string? summaryTag)
     {
-        summaryTag = null;
-        var items = new List<MenuItemSpec>();
-
         // Mac keeps summary + favorite actions even when the folder itself can't be listed.
         summaryTag = "summary:" + directoryPath;
         var summaryTitle = string.Format(
@@ -367,33 +463,16 @@ internal static class MenuBuilder
             snap.Error is null ? snap.TotalCount : 0);
         if (includeHidden && snap.Error is null)
             summaryTitle += L.Get("menu.directory_summary_includes_hidden");
-        items.Add(new MenuItemSpec
-        {
-            Tag = summaryTag,
-            Title = summaryTitle,
-            Enabled = snap.Error is null,
-            OnClick = snap.Error is null ? () => MenuActions.OpenPath(directoryPath) : null
-        });
 
-        if (isFavoriteRoot)
-            items.Add(RemoveFavoriteItem(directoryPath));
-        else if (volumeRoot is null && !FavoriteStore.Contains(directoryPath))
-            items.Add(AddFavoriteItem(directoryPath));
-
-        // Drive root: pin / unpin on AppBar (top bar).
-        if (volumeRoot is not null
-            && string.Equals(
-                Path.GetFullPath(directoryPath).TrimEnd('\\'),
-                Path.GetFullPath(volumeRoot).TrimEnd('\\'),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            var vol = VolumeService.ListVolumes().FirstOrDefault(v =>
-                string.Equals(v.RootPath, volumeRoot, StringComparison.OrdinalIgnoreCase));
-            if (vol is not null)
-                items.Add(CreateTopBarToggleItem(vol));
-        }
-
-        items.Add(Sep());
+        var items = BuildDirectoryHeaderItems(
+            directoryPath,
+            volumeRoot,
+            isFavoriteRoot,
+            summaryTitle,
+            summaryEnabled: snap.Error is null,
+            summaryOnClick: snap.Error is null ? () => MenuActions.OpenPath(directoryPath) : null,
+            summaryTag,
+            includeEject: snap.Error is null);
 
         if (snap.Error is not null)
         {
@@ -405,30 +484,6 @@ internal static class MenuBuilder
             });
             summaryTag = null;
             return items;
-        }
-
-        if (volumeRoot is not null
-            && string.Equals(
-                Path.GetFullPath(directoryPath).TrimEnd('\\'),
-                Path.GetFullPath(volumeRoot).TrimEnd('\\'),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            var vol = VolumeService.ListVolumes().FirstOrDefault(v =>
-                string.Equals(v.RootPath, volumeRoot, StringComparison.OrdinalIgnoreCase));
-            if (vol is not null && vol.DriveType is IODriveType.Removable or IODriveType.CDRom)
-            {
-                items.Add(new MenuItemSpec
-                {
-                    Glyph = AppGlyph.Eject,
-                    Title = L.Get("menu.eject"),
-                    OnClick = () =>
-                    {
-                        MenuActions.EjectDrive(volumeRoot);
-                        MenuSession.CloseAll();
-                    }
-                });
-                items.Add(Sep());
-            }
         }
 
         if (snap.Entries.Count == 0)

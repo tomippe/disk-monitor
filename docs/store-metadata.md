@@ -54,16 +54,13 @@ windows/publish/msix/DiskMonitor.msixbundle
 | 種別 | 名前 | 申告 |
 | --- | --- | --- |
 | Restricted | runFullTrust | 要 |
-| Restricted | unvirtualizedResources | 要 |
 | 通常 | internetClient | 申告不要 |
+
+`unvirtualizedResources` は使わない（設定はパッケージ仮想化下の LocalAppData、ログイン時起動は StartupTask）。
 
 ### runFullTrust — 理由（英語）
 
 The app is a full-trust desktop utility (EntryPoint: Windows.FullTrustApplication). It registers a bottom AppBar above the taskbar, shows per-volume free space, opens Explorer folders, manages the Recycle Bin, and ejects removable volumes. These shell and AppBar APIs are not available to sandboxed Store apps.
-
-### unvirtualizedResources — 理由（英語・500文字以内）
-
-Disk Monitor stores favorites, top-bar pin state, and local preferences under the real user profile. Virtualized paths would lose settings across updates. Scope: LOCALAPPDATA\DiskMonitor and user-selected folder favorites only. No other apps’ data is modified. Policy: https://apps.tomippe.jp/disk-monitor/policy/
 
 ---
 
@@ -165,7 +162,7 @@ How to verify the app:
 Technical notes:
 
 - Full-trust WPF desktop app (Windows.FullTrustApplication) with bottom AppBar registration.
-- Restricted capabilities: runFullTrust (AppBar / shell), unvirtualizedResources (local favorites and preferences under the real user profile).
+- Restricted capability: runFullTrust only (AppBar / shell). Open at Login uses the declared StartupTask (DiskMonitorStartupTask). Preferences stay in the app package data folder.
 - internetClient may be used for optional update checks only; no analytics SDK; no personal data collection.
 - Languages: en, ja, zh-Hans.
 
@@ -175,7 +172,7 @@ Technical notes:
 
 - [ ] version.txt / Package.appxmanifest Identity Version / MSIX 内バージョンが一致（第 4 桁 0）
 - [ ] プライバシーポリシー URL を Partner Center のプロパティに設定
-- [ ] Restricted capabilities（runFullTrust / unvirtualizedResources）を申告
+- [ ] Restricted capability（runFullTrust のみ）を申告
 - [ ] スクリーンショットを Partner Center に手動アップロード（API パッケージ提出はタイムアウトのため）
 - [ ] MSIX パッケージを Partner Center に手動アップロード
 - [ ] docs/store-metadata.md の文言が Partner Center 入力と一致

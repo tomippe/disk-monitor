@@ -18,7 +18,7 @@
   <data name="menu.trash" xml:space="preserve"><value>回收站</value></data>
   <data name="menu.empty_trash" xml:space="preserve"><value>清空回收站</value></data>
   <data name="menu.open_disk_utility" xml:space="preserve"><value>打开磁盘管理</value></data>
-  <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
+  <data name="menu.directory_loading" xml:space="preserve"><value>正在加载…</value></data>
   <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} 项</value></data>
   <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} 项 - {1}</value></data>
   <data name="menu.directory_summary_includes_hidden" xml:space="preserve"><value>（含隐藏项目）</value></data>

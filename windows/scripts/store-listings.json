@@ -1,63 +1,83 @@
-{
-  "applicationCategory": "UtilitiesAndTools_FileManager",
-  "pricing": {
-    "trialPeriod": "NoFreeTrial",
-    "priceId": "Free",
-    "isAdvancedPricingModel": true
-  },
-  "visibility": "Public",
-  "targetPublishMode": "Immediate",
-  "automaticBackupEnabled": true,
-  "canInstallOnRemovableMedia": true,
-  "meetAccessibilityGuidelines": false,
-  "enterpriseLicensing": "Online",
-  "hardwarePreferences": [],
-  "notesForCertification": "How to verify the app:\n\n1. Launch Disk Monitor. A slim horizontal bar appears just above the Windows taskbar (AppBar). Confirm drive free-space chips are visible.\n2. Click a volume chip. A menu opens with capacity info, open-in-Explorer, pin/unpin on the top bar, and eject (for removable volumes when available).\n3. From the bar or overflow menu, open Favorites (add a folder if needed), Recycle Bin (size / empty), and Open Disk Management.\n4. Right-click the notification-area icon (if shown) or use the app menu to quit. Expected: the AppBar disappears; no data is sent to developer servers.\n\nTechnical notes:\n\n- Full-trust WPF desktop app (Windows.FullTrustApplication) with bottom AppBar registration.\n- Restricted capabilities: runFullTrust (AppBar / shell), unvirtualizedResources (local favorites and preferences under the real user profile).\n- internetClient may be used for optional update checks only; no analytics SDK; no personal data collection.\n- Languages: en, ja, zh-Hans.",
-  "listings": {
-    "en-us": {
-      "title": "Disk Monitor",
-      "shortDescription": "Always-on free space above the taskbar. See volumes, favorites, and the Recycle Bin at a glance on Windows.",
-      "description": "Disk Monitor is a Windows utility that pins a slim AppBar just above the taskbar and always shows free space for each drive.\n\nOpen a chip to browse volumes, favorite folders, check or empty the Recycle Bin, eject removable media, and jump to Disk Management. Choose which drives and favorites appear on the top bar.\n\nThe app does not collect personally identifiable data; settings and display stay on your device. The UI supports Japanese, English, and Simplified Chinese and follows the Windows display language.",
-      "releaseNotes": "Initial release. Shows free space on an AppBar above the taskbar, with volume, favorites, and Recycle Bin actions.",
-      "features": [
-        "Always-on free space above the taskbar",
-        "Per-volume capacity and eject",
-        "Open favorite folders from the top bar or menu",
-        "Recycle Bin size and empty action",
-        "Shortcut to Disk Management",
-        "Japanese, English, Simplified Chinese; no personal data collection"
-      ],
-      "keywords": ["disk", "free space", "storage", "recycle bin", "utility"]
-    },
-    "ja-jp": {
-      "title": "Disk Monitor",
-      "shortDescription": "タスクバー直上に空き容量を常時表示。ボリューム・お気に入り・ごみ箱をひと目で確認できる Windows 用ユーティリティです。",
-      "description": "Disk Monitor は、Windows のタスクバー直上に横帯（AppBar）を置き、ドライブごとの空き容量を常時表示するユーティリティです。\n\nチップを開くとボリューム一覧、お気に入りフォルダ、ごみ箱の容量確認や空にする操作、取り出し、ディスクの管理へのショートカットが使えます。トップバーに表示するドライブやお気に入りは自分で選べます。\n\n個人を特定するデータは収集せず、設定と表示は端末内だけで完結します。UI は日本語・英語・簡体中国語に対応し、Windows の表示言語に追従します。",
-      "releaseNotes": "初期リリースです。タスクバー直上の AppBar に空き容量を表示し、ボリューム・お気に入り・ごみ箱を操作できます。",
-      "features": [
-        "タスクバー直上に空き容量を常時表示",
-        "ボリュームごとの容量確認と取り出し",
-        "お気に入りフォルダをトップバーやメニューから開ける",
-        "ごみ箱の容量表示と空にする操作",
-        "ディスクの管理へのショートカット",
-        "日本語・English・简体中文、個人データ収集なし"
-      ],
-      "keywords": ["ディスク", "空き容量", "ストレージ", "ごみ箱", "ユーティリティ"]
-    },
-    "zh-hans": {
-      "title": "Disk Monitor",
-      "shortDescription": "在任务栏上方常驻显示可用空间。一目了然查看卷、收藏夹和回收站的 Windows 工具。",
-      "description": "Disk Monitor 是一款 Windows 工具，在任务栏上方固定一条横条（AppBar），常驻显示各驱动器的可用空间。\n\n点击芯片可浏览卷、收藏文件夹，查看或清空回收站，弹出可移动介质，并打开磁盘管理。可自行选择在顶栏显示的驱动器和收藏。\n\n不收集可识别个人的数据，设置与显示均在本机完成。界面支持日语、英语和简体中文，并跟随 Windows 显示语言。",
-      "releaseNotes": "首次发布。在任务栏上方的 AppBar 显示可用空间，并支持卷、收藏夹和回收站操作。",
-      "features": [
-        "在任务栏上方常驻显示可用空间",
-        "按卷查看容量并弹出介质",
-        "从顶栏或菜单打开收藏文件夹",
-        "回收站容量显示与清空",
-        "打开磁盘管理的快捷方式",
-        "日语、英语、简体中文；不收集个人数据"
-      ],
-      "keywords": ["磁盘", "可用空间", "存储", "回收站", "工具"]
-    }
-  }
+﻿{
+    "applicationCategory":  "UtilitiesAndTools_FileManager",
+    "pricing":  {
+                    "trialPeriod":  "NoFreeTrial",
+                    "priceId":  "Free",
+                    "isAdvancedPricingModel":  true
+                },
+    "visibility":  "Public",
+    "targetPublishMode":  "Immediate",
+    "automaticBackupEnabled":  true,
+    "canInstallOnRemovableMedia":  true,
+    "meetAccessibilityGuidelines":  false,
+    "enterpriseLicensing":  "Online",
+    "hardwarePreferences":  [
+
+                            ],
+    "notesForCertification":  "How to verify the app:\n\n1. Launch Disk Monitor. A slim horizontal bar appears just above the Windows taskbar (AppBar). Confirm drive free-space chips are visible.\n2. Click a volume chip. A menu opens with capacity info, open-in-Explorer, pin/unpin on the top bar, and eject (for removable volumes when available).\n3. From the bar or overflow menu, open Favorites (add a folder if needed), Recycle Bin (size / empty), and Open Disk Management.\n4. Toggle Open at Login once (uses the declared StartupTask). Then quit from the menu. Expected: the AppBar disappears; no data is sent to developer servers.\n\nTechnical notes:\n\n- Full-trust WPF desktop app (Windows.FullTrustApplication) with bottom AppBar registration.\n- Restricted capability: runFullTrust only (AppBar / shell). Preferences use the package data folder. Open at Login uses StartupTask DiskMonitorStartupTask (no unvirtualizedResources).\n- internetClient may be used for optional update checks only; no analytics SDK; no personal data collection.\n- Languages: en, ja, zh-Hans.",
+    "listings":  {
+                     "en-us":  {
+                                   "title":  "Disk Monitor",
+                                   "shortDescription":  "Always-on free space above the taskbar. See volumes, favorites, and the Recycle Bin at a glance on Windows.",
+                                   "description":  "Disk Monitor is a Windows utility that pins a slim AppBar just above the taskbar and always shows free space for each drive.\n\nOpen a chip to browse volumes, favorite folders, check or empty the Recycle Bin, eject removable media, and jump to Disk Management. Choose which drives and favorites appear on the top bar.\n\nThe app does not collect personally identifiable data; settings and display stay on your device. The UI supports Japanese, English, and Simplified Chinese and follows the Windows display language.",
+                                   "releaseNotes":  "Initial release. Shows free space on an AppBar above the taskbar, with volume, favorites, and Recycle Bin actions.",
+                                   "features":  [
+                                                    "Always-on free space above the taskbar",
+                                                    "Per-volume capacity and eject",
+                                                    "Open favorite folders from the top bar or menu",
+                                                    "Recycle Bin size and empty action",
+                                                    "Shortcut to Disk Management",
+                                                    "Japanese, English, Simplified Chinese; no personal data collection"
+                                                ],
+                                   "keywords":  [
+                                                    "disk",
+                                                    "free space",
+                                                    "storage",
+                                                    "recycle bin",
+                                                    "utility"
+                                                ]
+                               },
+                     "ja-jp":  {
+                                   "title":  "Disk Monitor",
+                                   "shortDescription":  "タスクバー直上に空き容量を常時表示。ボリューム・お気に入り・ごみ箱をひと目で確認できる Windows 用ユーティリティです。",
+                                   "description":  "Disk Monitor は、Windows のタスクバー直上に横帯（AppBar）を置き、ドライブごとの空き容量を常時表示するユーティリティです。\n\nチップを開くとボリューム一覧、お気に入りフォルダ、ごみ箱の容量確認や空にする操作、取り出し、ディスクの管理へのショートカットが使えます。トップバーに表示するドライブやお気に入りは自分で選べます。\n\n個人を特定するデータは収集せず、設定と表示は端末内だけで完結します。UI は日本語・英語・簡体中国語に対応し、Windows の表示言語に追従します。",
+                                   "releaseNotes":  "初期リリースです。タスクバー直上の AppBar に空き容量を表示し、ボリューム・お気に入り・ごみ箱を操作できます。",
+                                   "features":  [
+                                                    "タスクバー直上に空き容量を常時表示",
+                                                    "ボリュームごとの容量確認と取り出し",
+                                                    "お気に入りフォルダをトップバーやメニューから開ける",
+                                                    "ごみ箱の容量表示と空にする操作",
+                                                    "ディスクの管理へのショートカット",
+                                                    "日本語・English・简体中文、個人データ収集なし"
+                                                ],
+                                   "keywords":  [
+                                                    "ディスク",
+                                                    "空き容量",
+                                                    "ストレージ",
+                                                    "ごみ箱",
+                                                    "ユーティリティ"
+                                                ]
+                               },
+                     "zh-hans":  {
+                                     "title":  "Disk Monitor",
+                                     "shortDescription":  "在任务栏上方常驻显示可用空间。一目了然查看卷、收藏夹和回收站的 Windows 工具。",
+                                     "description":  "Disk Monitor 是一款 Windows 工具，在任务栏上方固定一条横条（AppBar），常驻显示各驱动器的可用空间。\n\n点击芯片可浏览卷、收藏文件夹，查看或清空回收站，弹出可移动介质，并打开磁盘管理。可自行选择在顶栏显示的驱动器和收藏。\n\n不收集可识别个人的数据，设置与显示均在本机完成。界面支持日语、英语和简体中文，并跟随 Windows 显示语言。",
+                                     "releaseNotes":  "首次发布。在任务栏上方的 AppBar 显示可用空间，并支持卷、收藏夹和回收站操作。",
+                                     "features":  [
+                                                      "在任务栏上方常驻显示可用空间",
+                                                      "按卷查看容量并弹出介质",
+                                                      "从顶栏或菜单打开收藏文件夹",
+                                                      "回收站容量显示与清空",
+                                                      "打开磁盘管理的快捷方式",
+                                                      "日语、英语、简体中文；不收集个人数据"
+                                                  ],
+                                     "keywords":  [
+                                                      "磁盘",
+                                                      "可用空间",
+                                                      "存储",
+                                                      "回收站",
+                                                      "工具"
+                                                  ]
+                                 }
+                 }
 }

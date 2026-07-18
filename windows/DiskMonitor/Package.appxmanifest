@@ -3,8 +3,7 @@
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
          xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-         xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
-         IgnorableNamespaces="uap rescap desktop desktop6">
+         IgnorableNamespaces="uap rescap desktop">
 
   <Identity Name="StudioTomippe.DiskMonitor"
             Publisher="CN=7AA9757D-D72F-4DE2-9980-F9A659207C27"
@@ -14,8 +13,6 @@
     <DisplayName>Disk Monitor</DisplayName>
     <PublisherDisplayName>Studio Tomippe</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
-    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
   </Properties>
 
   <Dependencies>
@@ -56,7 +53,6 @@
   <Capabilities>
     <Capability Name="internetClient" />
     <rescap:Capability Name="runFullTrust" />
-    <rescap:Capability Name="unvirtualizedResources" />
   </Capabilities>
 
 </Package>

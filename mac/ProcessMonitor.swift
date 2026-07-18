@@ -1245,9 +1245,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showDirectoryWaitingPlaceholder(_ menu: DirectoryMenu) {
         menu.removeAllItems()
-        let item = NSMenuItem(title: NSLocalizedString("menu.directory_loading", comment: ""), action: nil, keyEquivalent: "")
+        let loading = NSLocalizedString("menu.directory_loading", comment: "")
+        // 一覧取得前でもサマリー・お気に入り・取り出しなどヘッダーは出す
+        if menu.directoryURL != nil {
+            addDirectoryMenuHeaderItems(menu, summaryTitle: loading)
+            menu.folderSizeMenuItem?.isEnabled = false
+            menu.folderSizeMenuItem?.action = nil
+            return
+        }
+        let item = NSMenuItem(title: loading, action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
+    }
+
+    /// 項目数サマリー・お気に入り・取り出しなど、フォルダ一覧より上のヘッダー行を追加する。
+    private func addDirectoryMenuHeaderItems(_ menu: DirectoryMenu, summaryTitle: String) {
+        menu.folderSizeMenuItem = nil
+        guard let dir = menu.directoryURL else { return }
+
+        let summaryItem = NSMenuItem(
+            title: summaryTitle,
+            action: #selector(openFileFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        summaryItem.target = self
+        summaryItem.representedObject = dir
+        menu.folderSizeMenuItem = summaryItem
+        menu.addItem(summaryItem)
+
+        switch menu.favoriteMode {
+        case .favorite:
+            menu.addItem(removeFromFavoritesMenuItem(for: dir))
+        case .browse:
+            if menu.volumeRow == nil, !FavoriteStore.contains(dir) {
+                menu.addItem(addToFavoritesMenuItem(for: dir))
+            }
+        }
+
+        menu.addItem(.separator())
+
+        if let row = menu.volumeRow, row.showsDetachSubmenu {
+            menu.addItem(detachMenuItem(for: row))
+            menu.addItem(.separator())
+        }
     }
 
     private static func optionKeyPressed() -> Bool {
@@ -1272,7 +1312,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let menu, menu.loadGeneration == generation, let dir = menu.directoryURL else { return }
         let includeHidden = Self.optionKeyPressed()
         menu.includeHiddenFiles = includeHidden
-        let volumeRow = menu.volumeRow
         directoryListingQueue.addOperation { [weak self, weak menu] in
             guard let self, let menu else { return }
             let snapshot = Self.readDirectorySnapshot(
@@ -1289,7 +1328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // update() → menuNeedsUpdate が !loaded でプレースホルダに戻さないよう先に立てる
                 menu.loaded = true
                 menu.loadAttempt = 0
-                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                self.applyDirectorySnapshot(snapshot, to: menu)
                 menu.update()
             }
         }
@@ -1337,6 +1376,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showDirectoryLoadRecovery(_ menu: DirectoryMenu) {
         menu.removeAllItems()
+        addDirectoryMenuHeaderItems(
+            menu,
+            summaryTitle: NSLocalizedString("menu.directory_loading", comment: "")
+        )
+        menu.folderSizeMenuItem?.isEnabled = false
+        menu.folderSizeMenuItem?.action = nil
         let message = NSMenuItem(
             title: NSLocalizedString("menu.directory_load_stuck", comment: ""),
             action: nil,
@@ -1433,42 +1478,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return built
     }
 
-    private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu, volumeRow: VolumeRow?) {
+    private func applyDirectorySnapshot(_ snapshot: DirectorySnapshot, to menu: DirectoryMenu) {
         let started = CFAbsoluteTimeGetCurrent()
         menu.removeAllItems()
         menu.sizeUpdateGeneration &+= 1
-        menu.folderSizeMenuItem = nil
         guard let dir = menu.directoryURL else { return }
 
         let generation = menu.sizeUpdateGeneration
         let itemCount = snapshot.error == nil ? snapshot.totalCount : 0
         menu.folderItemCount = itemCount
-        let summaryItem = NSMenuItem(
-            title: directoryFolderSummaryTitle(itemCount: itemCount, includesHidden: menu.includeHiddenFiles),
-            action: #selector(openFileFromMenu(_:)),
-            keyEquivalent: ""
+        addDirectoryMenuHeaderItems(
+            menu,
+            summaryTitle: directoryFolderSummaryTitle(itemCount: itemCount, includesHidden: menu.includeHiddenFiles)
         )
-        summaryItem.target = self
-        summaryItem.representedObject = dir
-        menu.folderSizeMenuItem = summaryItem
-        menu.addItem(summaryItem)
-
-        switch menu.favoriteMode {
-        case .favorite:
-            menu.addItem(removeFromFavoritesMenuItem(for: dir))
-        case .browse:
-            if menu.volumeRow == nil, !FavoriteStore.contains(dir) {
-                menu.addItem(addToFavoritesMenuItem(for: dir))
-            }
-        }
-
-        menu.addItem(.separator())
         scheduleDirectoryFolderSize(menu: menu, generation: generation, url: dir)
-
-        if let row = volumeRow, row.showsDetachSubmenu {
-            menu.addItem(detachMenuItem(for: row))
-            menu.addItem(.separator())
-        }
 
         if let error = snapshot.error {
             let format = NSLocalizedString("menu.directory_read_error", comment: "")
@@ -1593,10 +1616,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let menu = sender.menu as? DirectoryMenu,
               let dir = menu.directoryURL else { return }
         FavoriteStore.add(url)
-        guard menu.loaded else { return }
+        guard menu.loaded else {
+            // 読み込み中でもヘッダーを差し替え（「追加」を消す）
+            showDirectoryWaitingPlaceholder(menu)
+            menu.update()
+            return
+        }
         menu.sizeUpdateGeneration &+= 1
         let generation = menu.sizeUpdateGeneration
-        let volumeRow = menu.volumeRow
         let includeHidden = menu.includeHiddenFiles
         directoryListingQueue.addOperation { [weak self, weak menu] in
             guard let self, let menu else { return }
@@ -1607,7 +1634,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             DispatchQueue.main.async {
                 guard menu.sizeUpdateGeneration == generation else { return }
-                self.applyDirectorySnapshot(snapshot, to: menu, volumeRow: volumeRow)
+                self.applyDirectorySnapshot(snapshot, to: menu)
                 menu.update()
             }
         }

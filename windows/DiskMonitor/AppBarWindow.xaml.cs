@@ -143,6 +143,8 @@ public partial class AppBarWindow : Window
             try
             {
                 _ = MenuActions.RecycleBinBytes(); // refresh cache off-UI
+                // Re-query Explorer display names — volume labels change after format / rename.
+                ShellVolumeHelper.InvalidateMenuDisplayNames();
                 var system = VolumeService.SystemVolume();
                 if (system is null)
                     status = L.Get("app.name");
@@ -633,17 +635,15 @@ public partial class AppBarWindow : Window
         _barMenuGeneration++;
         var generation = _barMenuGeneration;
         SetActiveBarChip(chip);
-        // Snapshot before Show/Activate — ShowAbove must not replace a true Alt with false.
+        // Snapshot before listing — ShowAbove Activate must not replace a true Alt with false.
         AltKeyState.Capture();
         var menu = new VolumeMenuWindow();
         AttachBarMenuLifetime(menu, generation);
-        menu.BeginLoad();
-        menu.SetItems([new MenuItemSpec { Title = L.Get("menu.directory_loading"), Enabled = false }]);
-        menu.ShowAbove(chip);
-        // Re-capture after Activate so a still-held Alt is not lost to SC_KEYMENU churn.
         if (AltKeyState.IsDown())
             AltKeyState.Capture(true);
+        // Populate before Show so directory headers (loading / top-bar) paint on first frame.
         spec.PopulateSubmenu(menu);
+        menu.ShowAbove(chip);
     }
 
     private void ShowMoreMenu()

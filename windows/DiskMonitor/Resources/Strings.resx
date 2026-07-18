@@ -18,7 +18,7 @@
   <data name="menu.trash" xml:space="preserve"><value>Recycle Bin</value></data>
   <data name="menu.empty_trash" xml:space="preserve"><value>Empty Recycle Bin</value></data>
   <data name="menu.open_disk_utility" xml:space="preserve"><value>Open Disk Management</value></data>
-  <data name="menu.directory_loading" xml:space="preserve"><value>…</value></data>
+  <data name="menu.directory_loading" xml:space="preserve"><value>Loading…</value></data>
   <data name="menu.directory_summary_items" xml:space="preserve"><value>{0} items</value></data>
   <data name="menu.directory_summary_items_size" xml:space="preserve"><value>{0} items - {1}</value></data>
   <data name="menu.directory_summary_includes_hidden" xml:space="preserve"><value> (including hidden items)</value></data>

@@ -5,12 +5,14 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using DiskMonitor.Helpers;
 using Microsoft.Win32;
+using Windows.ApplicationModel;
 
 namespace DiskMonitor.Services;
 
 public static class MenuActions
 {
     public const string IntroUrl = "https://apps.tomippe.jp/disk-monitor/";
+    public const string StartupTaskId = "DiskMonitorStartupTask";
 
     public static void OpenPath(string path)
     {
@@ -159,12 +161,34 @@ public static class MenuActions
 
     public static bool IsOpenAtLogin()
     {
+        if (TryGetStartupTask(out var task))
+        {
+            return task!.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy;
+        }
+
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         return key?.GetValue("DiskMonitor") is string;
     }
 
     public static void SetOpenAtLogin(bool enabled)
     {
+        // Packaged (Store/MSIX): use declared StartupTask — no HKCU\Run, no unvirtualizedResources.
+        if (TryGetStartupTask(out var task))
+        {
+            ClearLegacyRunKey();
+            if (enabled)
+            {
+                if (task!.State is StartupTaskState.Disabled or StartupTaskState.DisabledByUser)
+                    task.RequestEnableAsync().AsTask().GetAwaiter().GetResult();
+            }
+            else if (task!.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy)
+            {
+                task.Disable();
+            }
+            return;
+        }
+
+        // Unpackaged EXE (sideload / local build): HKCU Run is fine.
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         if (key is null) return;
         if (enabled)
@@ -176,6 +200,36 @@ public static class MenuActions
         else
         {
             key.DeleteValue("DiskMonitor", false);
+        }
+    }
+
+    private static bool TryGetStartupTask(out StartupTask? task)
+    {
+        task = null;
+        try
+        {
+            // Throws / fails when not running inside an MSIX package.
+            _ = Package.Current.Id;
+            task = StartupTask.GetAsync(StartupTaskId).AsTask().GetAwaiter().GetResult();
+            return task is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ClearLegacyRunKey()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+            key?.DeleteValue("DiskMonitor", throwOnMissingValue: false);
+        }
+        catch
+        {
+            // ignore
         }
     }
 

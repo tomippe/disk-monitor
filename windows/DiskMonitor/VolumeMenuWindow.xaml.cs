@@ -627,19 +627,18 @@ public partial class VolumeMenuWindow : Window
         if (previousParent is not null && previousParent != row)
             previousParent.Background = WpfBrushes.Transparent;
 
-        // Before ShowBeside Activate — keep Alt for hidden listing.
+        // Capture Alt before Activate / listing — focus changes can disturb key state.
         AltKeyState.Capture();
 
         var child = new VolumeMenuWindow();
         _child = child;
         _openSubmenuRow = row;
         row.Background = HoverBrush;
-        // Show loading placeholder immediately so the popup appears without waiting.
-        child.SetItems([new MenuItemSpec { Title = L.Get("menu.directory_loading"), Enabled = false }]);
-        child.ShowBeside(this, row);
         if (AltKeyState.IsDown())
             AltKeyState.Capture(true);
+        // Populate before Show so directory headers (loading / top-bar) paint on first frame.
         spec.PopulateSubmenu(child);
+        child.ShowBeside(this, row);
     }
 
     private void CloseChild()
