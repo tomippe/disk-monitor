@@ -6,7 +6,7 @@
 .EXAMPLE
     .\build.ps1              # EXE + MSIX (signed) — full build
     .\build.ps1 -Exe         # EXE only
-    .\build.ps1 -Clean       # Clean publish first
+    .\build.ps1 -Clean       # Clean build output first
     .\build.ps1 -Noverup     # Skip version.txt bump
 #>
 param(
@@ -28,7 +28,7 @@ $projectRoot = (Resolve-Path (Join-Path $rootDir "..")).Path
 
 $DIST_DIR = Join-Path $projectRoot "..\apps.tomippe.jp\disk-monitor"
 $projectDir = Join-Path $rootDir "DiskMonitor"
-$publishDir = Join-Path $rootDir "publish"
+$buildDir = Join-Path $rootDir "build"
 $csproj = Join-Path $projectDir "DiskMonitor.csproj"
 $assetsDir = Join-Path $projectDir "Assets"
 $versionFile = Join-Path $rootDir "version.txt"
@@ -65,11 +65,11 @@ Set-Content -Path $csproj -Value $csprojContent -NoNewline
 
 if ($Clean) {
     Write-Step "Clean"
-    Remove-Item -Recurse -Force (Join-Path $projectDir "bin"), (Join-Path $projectDir "obj"), $publishDir -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $projectDir "bin"), (Join-Path $projectDir "obj"), $buildDir -ErrorAction SilentlyContinue
     Write-Ok "Cleaned"
 }
 
-New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 
 $procs = Get-Process -Name "DiskMonitor" -ErrorAction SilentlyContinue
 if ($procs) {
@@ -92,7 +92,7 @@ Write-Host "Building EXE (single-file)..." -ForegroundColor Gray
 
 foreach ($rid in $rids) {
     $arch = $rid -replace "win-", ""
-    $outDir = Join-Path $publishDir "exe\$arch"
+    $outDir = Join-Path $buildDir "exe\$arch"
 
     & dotnet publish $csproj `
         -c Release `
@@ -141,7 +141,7 @@ if ($signingPfx) {
     exit 1
 }
 
-Remove-Item -Recurse -Force (Join-Path $publishDir "msix"), (Join-Path $publishDir "msix-content") -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $buildDir "msix"), (Join-Path $buildDir "msix-content") -ErrorAction SilentlyContinue
 
 $makeappx = Find-MakeAppx
 if (-not $makeappx) {
@@ -150,7 +150,7 @@ if (-not $makeappx) {
 }
 Write-Host "  makeappx.exe: $makeappx" -ForegroundColor Gray
 
-$msixOutputDir = Join-Path $publishDir "msix"
+$msixOutputDir = Join-Path $buildDir "msix"
 New-Item -ItemType Directory -Path $msixOutputDir -Force | Out-Null
 
 $msixFiles = @()
@@ -158,7 +158,7 @@ $msixVersion = "$version.0"
 
 foreach ($rid in $rids) {
     $arch = $rid -replace "win-", ""
-    $contentDir = Join-Path $publishDir "msix-content\$arch"
+    $contentDir = Join-Path $buildDir "msix-content\$arch"
 
     Write-Host "  Publishing $rid (multi-file for MSIX)..." -ForegroundColor Gray
 
@@ -236,7 +236,7 @@ if ($msixFiles.Count -gt 0) {
     Write-Host "Creating MSIX Bundle..." -ForegroundColor Gray
 
     $bundlePath = Join-Path $msixOutputDir "DiskMonitor.msixbundle"
-    $bundleContentDir = Join-Path $publishDir "msix-bundle-content"
+    $bundleContentDir = Join-Path $buildDir "msix-bundle-content"
 
     if (Test-Path $bundleContentDir) { Remove-Item -Recurse -Force $bundleContentDir }
     New-Item -ItemType Directory -Path $bundleContentDir -Force | Out-Null
@@ -274,14 +274,14 @@ if ($msixFiles.Count -gt 0) {
     Remove-Item -Recurse -Force $bundleContentDir -ErrorAction SilentlyContinue
 }
 
-Remove-Item -Recurse -Force (Join-Path $publishDir "msix-content") -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $buildDir "msix-content") -ErrorAction SilentlyContinue
 
 if (Test-Path (Split-Path $DIST_DIR -Parent)) {
     Write-Step "Direct download (Sparkle-like for Windows)"
     New-Item -ItemType Directory -Path $DIST_DIR -Force | Out-Null
 
-    $exeX64Src = Join-Path $publishDir "exe\x64\DiskMonitor.exe"
-    $exeArmSrc = Join-Path $publishDir "exe\arm64\DiskMonitor.exe"
+    $exeX64Src = Join-Path $buildDir "exe\x64\DiskMonitor.exe"
+    $exeArmSrc = Join-Path $buildDir "exe\arm64\DiskMonitor.exe"
     $exeX64Name = "DiskMonitor-win-x64.exe"
     $exeArmName = "DiskMonitor-win-arm64.exe"
     $exeX64Dst = Join-Path $DIST_DIR $exeX64Name
@@ -328,6 +328,28 @@ if (Test-Path (Split-Path $DIST_DIR -Parent)) {
     }
 }
 
+Write-Step "Partner Center listing CSV"
+$listingCsvScript = Join-Path $rootDir "scripts\generate-listing-csv.py"
+# Partner Center listing CSV → windows/build/（成果物と同じ場所）
+$listingCsvOut = Join-Path $rootDir "build\listingData-9P47CBVHQ797.csv"
+$listingCsvBuildCopy = Join-Path $buildDir "msix\listingData-9P47CBVHQ797.csv"
+if (-not (Test-Path -LiteralPath $listingCsvScript)) {
+    Write-Error "Missing $listingCsvScript"
+    exit 1
+}
+python $listingCsvScript -o $listingCsvOut
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "generate-listing-csv.py failed"
+    exit 1
+}
+if (-not (Test-Path -LiteralPath $listingCsvOut)) {
+    Write-Error "listing CSV missing after generate: $listingCsvOut"
+    exit 1
+}
+New-Item -ItemType Directory -Path (Split-Path $listingCsvPublishCopy) -Force | Out-Null
+Copy-Item -LiteralPath $listingCsvOut -Destination $listingCsvBuildCopy -Force
+Write-Ok $listingCsvOut
+
 if (-not $Noverup) {
     Write-Step "Bump version"
     Save-NextAppVersion -Version $version -VersionFile $versionFile
@@ -335,5 +357,6 @@ if (-not $Noverup) {
 
 Write-Host ""
 Write-Host "Build complete: v$version" -ForegroundColor Green
-Write-Host "  EXE: publish\exe\x64, publish\exe\arm64" -ForegroundColor Gray
-Write-Host "  MSIX: publish\msix\DiskMonitor.msixbundle (signed)" -ForegroundColor Gray
+Write-Host "  EXE: build\exe\x64, build\exe\arm64" -ForegroundColor Gray
+Write-Host "  MSIX: build\msix\DiskMonitor.msixbundle (signed)" -ForegroundColor Gray
+Write-Host "  Listing CSV (Partner Center import): build\listingData-9P47CBVHQ797.csv" -ForegroundColor Gray

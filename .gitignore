@@ -1,6 +1,6 @@
 build/
 mac/build/
-windows/publish/
+windows/build/
 windows/**/bin/
 windows/**/obj/
 *.provisionprofile

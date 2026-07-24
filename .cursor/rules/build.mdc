@@ -39,7 +39,7 @@ alwaysApply: true
 | `.\build.ps1 -Clean` | クリーン後フルビルド |
 | `.\build.ps1 -Noverup` | `windows/version.txt` の版上げスキップ |
 
-成果物: `windows/publish/exe/{x64,arm64}/`、`windows/publish/msix/DiskMonitor.msixbundle`  
+成果物: `windows/build/exe/{x64,arm64}/`、`windows/build/msix/DiskMonitor.msixbundle`、`windows/build/listingData-9P47CBVHQ797.csv`（Partner Center Import listings 用。正本は `windows/scripts/store-listings.json`）  
 詳細: `windows/BUILD.md`
 
 ## 固有設定

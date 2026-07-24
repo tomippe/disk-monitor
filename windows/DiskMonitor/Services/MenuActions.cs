@@ -146,9 +146,7 @@ public static class MenuActions
 
     public static void ShowAbout()
     {
-        AppDialog.Information(
-            L.Get("menu.about"),
-            string.Format(L.Get("about.format"), AppVersion(), AppVersion()));
+        AboutWindow.ShowAbout();
     }
 
     public static void RestartApp()

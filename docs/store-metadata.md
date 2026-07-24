@@ -45,7 +45,7 @@ Store ID
 Identity Version の第 4 桁は常に 0（例: version.txt が 1.0.4 なら manifest は 1.0.4.0）
 
 提出パッケージ
-windows/publish/msix/DiskMonitor.msixbundle
+windows/build/msix/DiskMonitor.msixbundle
 
 ---
 
