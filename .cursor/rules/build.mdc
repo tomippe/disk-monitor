@@ -39,7 +39,9 @@ alwaysApply: true
 | `.\build.ps1 -Clean` | クリーン後フルビルド |
 | `.\build.ps1 -Noverup` | `windows/version.txt` の版上げスキップ |
 
-成果物: `windows/build/exe/{x64,arm64}/`、`windows/build/msix/DiskMonitor.msixbundle`、`windows/build/listingData-9P47CBVHQ797.csv`（Partner Center Import listings 用。正本は `windows/scripts/store-listings.json`）  
+**UNC / ネットワークドライブ (`Y:` 等)**: `windows/build.ps1` 先頭 — bootstrap → **`windows-unc-build.ps1` をスクリプトレベル dot-source** → フルステージ → **`windows/build/` と `windows/version.txt` を戻す**（`build-system.mdc` 参照）。
+
+成果物: `windows/build/exe/{x64,arm64}/`、`windows/build/msix/DiskMonitor.msixbundle`、`windows/build/msix/listingData-9P47CBVHQ797.csv`（Partner Center Import listings 用。正本は `windows/scripts/store-listings.json`）  
 詳細: `windows/BUILD.md`
 
 ## 固有設定

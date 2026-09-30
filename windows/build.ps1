@@ -18,13 +18,32 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ($env:TOMIPPE_BUILD_COMMON_ROOT -and (Test-Path -LiteralPath (Join-Path $env:TOMIPPE_BUILD_COMMON_ROOT 'windows-build-bootstrap.ps1'))) {
+    . (Join-Path $env:TOMIPPE_BUILD_COMMON_ROOT 'windows-build-bootstrap.ps1')
+} else {
+    . (Join-Path $PSScriptRoot '..\..\build-common\windows-build-bootstrap.ps1')
+}
+$buildCommonRoot = Resolve-BuildCommonRoot -WindowsScriptRoot $PSScriptRoot
+. (Join-Path $buildCommonRoot 'windows-unc-build.ps1')
+if ($env:TOMIPPE_WIN_BUILD_STAGED -ne '1') {
+    $projRootForStage = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    if (Invoke-WindowsBuildViaLocalStageIfNeeded `
+            -ProjectRoot $projRootForStage `
+            -StageName 'disk-monitor-win-build' `
+            -ArtifactRelativePaths @('windows\build', 'windows\version.txt') `
+            -BuildScriptRelative 'windows\build.ps1' `
+            -BoundParameters $PSBoundParameters) {
+        exit 0
+    }
+}
+
 $rootDir = $PSScriptRoot
-$projectRoot = (Resolve-Path (Join-Path $rootDir "..")).Path
+$projectRoot = Resolve-TomippeProjectRoot -WindowsScriptRoot $rootDir
 
 . (Join-Path $rootDir "scripts\_msstore-env.ps1")
-. (Join-Path $projectRoot "..\build-common\helpers.ps1")
-. (Join-Path $projectRoot "..\build-common\version.ps1")
-. (Join-Path $projectRoot "..\build-common\ftp-upload.ps1")
+. (Join-Path $buildCommonRoot "helpers.ps1")
+. (Join-Path $buildCommonRoot "version.ps1")
+. (Join-Path $buildCommonRoot "ftp-upload.ps1")
 
 $DIST_DIR = Join-Path $projectRoot "..\apps.tomippe.jp\disk-monitor"
 $projectDir = Join-Path $rootDir "DiskMonitor"
@@ -154,6 +173,7 @@ $msixOutputDir = Join-Path $buildDir "msix"
 New-Item -ItemType Directory -Path $msixOutputDir -Force | Out-Null
 
 $msixFiles = @()
+$bundlePath = $null
 $msixVersion = "$version.0"
 
 foreach ($rid in $rids) {
@@ -330,9 +350,7 @@ if (Test-Path (Split-Path $DIST_DIR -Parent)) {
 
 Write-Step "Partner Center listing CSV"
 $listingCsvScript = Join-Path $rootDir "scripts\generate-listing-csv.py"
-# Partner Center listing CSV → windows/build/（成果物と同じ場所）
-$listingCsvOut = Join-Path $rootDir "build\listingData-9P47CBVHQ797.csv"
-$listingCsvBuildCopy = Join-Path $buildDir "msix\listingData-9P47CBVHQ797.csv"
+$listingCsvOut = Join-Path $buildDir "msix\listingData-9P47CBVHQ797.csv"
 if (-not (Test-Path -LiteralPath $listingCsvScript)) {
     Write-Error "Missing $listingCsvScript"
     exit 1
@@ -346,9 +364,17 @@ if (-not (Test-Path -LiteralPath $listingCsvOut)) {
     Write-Error "listing CSV missing after generate: $listingCsvOut"
     exit 1
 }
-New-Item -ItemType Directory -Path (Split-Path $listingCsvPublishCopy) -Force | Out-Null
-Copy-Item -LiteralPath $listingCsvOut -Destination $listingCsvBuildCopy -Force
 Write-Ok $listingCsvOut
+
+Write-Step "Yoink (Partner Center submit artifacts)"
+$sendYoink = Join-Path $buildCommonRoot 'send-mspc-artifacts-to-yoink.ps1'
+$yoinkArtifacts = @()
+if ($bundlePath -and (Test-Path -LiteralPath $bundlePath)) { $yoinkArtifacts += $bundlePath }
+if (Test-Path -LiteralPath $listingCsvOut) { $yoinkArtifacts += $listingCsvOut }
+if ($yoinkArtifacts.Count -gt 0) {
+    & $sendYoink -ArtifactPath $yoinkArtifacts
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Yoink send failed (artifacts remain on disk)" }
+}
 
 if (-not $Noverup) {
     Write-Step "Bump version"
@@ -359,4 +385,4 @@ Write-Host ""
 Write-Host "Build complete: v$version" -ForegroundColor Green
 Write-Host "  EXE: build\exe\x64, build\exe\arm64" -ForegroundColor Gray
 Write-Host "  MSIX: build\msix\DiskMonitor.msixbundle (signed)" -ForegroundColor Gray
-Write-Host "  Listing CSV (Partner Center import): build\listingData-9P47CBVHQ797.csv" -ForegroundColor Gray
+Write-Host "  Listing CSV (Partner Center import): build\msix\listingData-9P47CBVHQ797.csv" -ForegroundColor Gray

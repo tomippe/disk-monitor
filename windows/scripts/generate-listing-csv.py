@@ -19,8 +19,7 @@ WIN_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS = Path(__file__).resolve().parent
 DEFAULT_JSON = SCRIPTS / "store-listings.json"
 DEFAULT_TEMPLATE = SCRIPTS / "listing-csv-template.csv"
-# Not under build/ (gitignored) — so it shows in IDE File Changed / Explorer.
-DEFAULT_OUT = WIN_DIR / "dist" / "listingData-9P47CBVHQ797.csv"
+DEFAULT_OUT = WIN_DIR / "build" / "msix" / "listingData-9P47CBVHQ797.csv"
 
 # store-listings.json keys → CSV language columns
 LANG_MAP = (

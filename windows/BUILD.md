@@ -36,9 +36,8 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 - **直接配布**（フルビルド時）: `../apps.tomippe.jp/disk-monitor/DiskMonitor-win-{x64,arm64}.exe` と `manifest.json` の `win_version` / `win_url_*`（FTP 同期・任意）
 - **MSIX バンドル**（Partner Center 用）: `build\msix\DiskMonitor.msixbundle`（更新は Store 側。アプリ内アップデート確認は無し）
 - 個別: `build\msix\DiskMonitor_x64.msix` / `DiskMonitor_arm64.msix`
-- **listing CSV**（Partner Center → Store listings → Import）: `dist\listingData-9P47CBVHQ797.csv`  
-  - フルビルド成功時に `scripts/generate-listing-csv.py` が生成（文言正本: `scripts/store-listings.json`。CSV は手編集しない）
-  - `build/` は gitignore のため、成果物の正本パスは `dist/`（IDE の File Changed / Explorer で開ける）
+- **listing CSV**（Partner Center → Store listings → Import）: `build\msix\listingData-9P47CBVHQ797.csv`  
+  - フルビルド成功時に `scripts/generate-listing-csv.py` が MSIX バンドルと同じフォルダへ生成（文言正本: `scripts/store-listings.json`。CSV は手編集しない）
 
 Store タイル PNG が無い場合、ビルド時に `generate-assets.ps1` が `DiskMonitor\Assets\app-icon.png` から生成する。
 
