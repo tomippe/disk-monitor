@@ -139,7 +139,9 @@ create_app_bundle() {
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>"
     fi
-    if [ -f "$(mac_apps_logo_path)" ]; then
+    if [ -f "$(mac_apps_about_logo_path)" ]; then
+        cp "$(mac_apps_about_logo_path)" "$RESOURCES/"
+    elif [ -f "$(mac_apps_logo_path)" ]; then
         cp "$(mac_apps_logo_path)" "$RESOURCES/"
     elif [ -f "Resources/AppsLogo.png" ]; then
         cp "Resources/AppsLogo.png" "$RESOURCES/"
