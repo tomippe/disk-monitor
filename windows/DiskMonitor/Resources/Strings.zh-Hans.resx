@@ -32,7 +32,7 @@
   <data name="menu.about" xml:space="preserve"><value>关于 Disk Monitor</value></data>
   <data name="menu.send_feedback" xml:space="preserve"><value>评分和评价...</value></data>
   <data name="about.format" xml:space="preserve"><value>版本 {0}</value></data>
-  <data name="about.copyright" xml:space="preserve"><value>Copyright © 2026 tomippe. All rights reserved.</value></data>
+  <data name="about.copyright" xml:space="preserve"><value>Copyright © 2026 Studio Tomippe. All rights reserved.</value></data>
   <data name="about.open_intro" xml:space="preserve"><value>在 apps.tomippe.jp 打开应用介绍页</value></data>
   <data name="about.open_website" xml:space="preserve"><value>打开网站</value></data>
   <data name="button.ok" xml:space="preserve"><value>确定</value></data>

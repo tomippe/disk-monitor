@@ -13,7 +13,7 @@ https://apps.tomippe.jp/disk-monitor/policy/
 ユーティリティとツール > ファイル マネージャー / Utilities & tools > File managers
 
 著作権
-Copyright © 2026 tomippe. All rights reserved.
+Copyright © 2026 Studio Tomippe. All rights reserved.
 
 データ収集（個人データ）
 いいえ（収集しない）

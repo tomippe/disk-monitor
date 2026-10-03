@@ -86,7 +86,7 @@ $meta = Get-Content -LiteralPath $ListingsJson -Raw -Encoding UTF8 | ConvertFrom
 function New-BaseListingFromMeta {
     param($LangMeta)
     return [PSCustomObject]@{
-        copyrightAndTrademarkInfo = "Copyright (c) 2026 tomippe. All rights reserved."
+        copyrightAndTrademarkInfo = "Copyright (c) 2026 Studio Tomippe. All rights reserved."
         keywords                  = @($LangMeta.keywords)
         licenseTerms              = ""
         privacyPolicy             = ""

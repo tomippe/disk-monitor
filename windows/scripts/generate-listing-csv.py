@@ -28,7 +28,7 @@ LANG_MAP = (
     ("zh-hans", "zh-hans"),
 )
 
-COPYRIGHT = "Copyright (c) 2026 tomippe. All rights reserved."
+COPYRIGHT = "Copyright (c) 2026 Studio Tomippe. All rights reserved."
 
 
 def load_listings(path: Path) -> dict:

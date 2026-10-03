@@ -72,8 +72,8 @@ foreach ($lang in $langs) {
         $i++
     }
 
-    Set-FieldValue $rows "CopyrightAndTrademarkInfo" $lang "Copyright (c) 2026 tomippe. All rights reserved."
-    Set-FieldValue $rows "Copyright" $lang "Copyright (c) 2026 tomippe. All rights reserved."
+    Set-FieldValue $rows "CopyrightAndTrademarkInfo" $lang "Copyright (c) 2026 Studio Tomippe. All rights reserved."
+    Set-FieldValue $rows "Copyright" $lang "Copyright (c) 2026 Studio Tomippe. All rights reserved."
 }
 
 # Prefer UTF-8 with BOM for Excel / Partner Center

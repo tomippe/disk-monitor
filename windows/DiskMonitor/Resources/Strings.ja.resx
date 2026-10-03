@@ -32,7 +32,7 @@
   <data name="menu.about" xml:space="preserve"><value>Disk Monitorについて</value></data>
   <data name="menu.send_feedback" xml:space="preserve"><value>評価とレビュー...</value></data>
   <data name="about.format" xml:space="preserve"><value>バージョン {0}</value></data>
-  <data name="about.copyright" xml:space="preserve"><value>Copyright © 2026 tomippe. All rights reserved.</value></data>
+  <data name="about.copyright" xml:space="preserve"><value>Copyright © 2026 Studio Tomippe. All rights reserved.</value></data>
   <data name="about.open_intro" xml:space="preserve"><value>apps.tomippe.jp の紹介ページを開く</value></data>
   <data name="about.open_website" xml:space="preserve"><value>Webサイトを開く</value></data>
   <data name="button.ok" xml:space="preserve"><value>OK</value></data>
